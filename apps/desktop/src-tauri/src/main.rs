@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
-use agenttrace_adapter_api::Capability;
+use agenttrace_adapter_api::{Capability, ImportRequest};
 use agenttrace_protocol::{EventEnvelope, EventKind, ProvenanceLevel};
 use agenttrace_redaction::{REDACTED, Redactor};
 use agenttrace_registry::AdapterRegistry;
 use agenttrace_storage::{ArtifactMetadata, RunSummary, TraceStore};
+use futures::StreamExt;
 use serde_json::{Map, Value, json};
 use tauri::{Manager, State};
 use uuid::Uuid;
@@ -62,6 +63,46 @@ async fn get_run_stats(state: State<'_, AppState>, run_id: Uuid) -> Result<Value
 }
 
 #[tauri::command]
+async fn import_trace(
+    state: State<'_, AppState>,
+    harness: String,
+    path: String,
+) -> Result<Value, String> {
+    let id = AdapterRegistry::parse(&harness)
+        .ok_or_else(|| format!("unknown harness `{harness}`"))?;
+    let adapter = state
+        .registry
+        .get(id)
+        .ok_or_else(|| format!("harness `{harness}` is not registered"))?;
+    let run_id = Uuid::new_v4();
+    let mut stream = adapter
+        .import(ImportRequest {
+            run_id,
+            path: PathBuf::from(path),
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut imported_events = 0_u64;
+
+    while let Some(event) = stream.next().await {
+        let event = event.map_err(|error| error.to_string())?;
+        let event = sanitize_event(event, &state.redactor)?;
+        state
+            .store
+            .append_event(&event)
+            .await
+            .map_err(|error| error.to_string())?;
+        imported_events = imported_events.saturating_add(1);
+    }
+
+    Ok(json!({
+        "run_id": run_id,
+        "harness": AdapterRegistry::canonical_name(id),
+        "imported_events": imported_events,
+    }))
+}
+
+#[tauri::command]
 async fn compare_runs(
     state: State<'_, AppState>,
     left: Uuid,
@@ -77,10 +118,24 @@ async fn compare_runs(
         .load_run_events(right)
         .await
         .map_err(|error| error.to_string())?;
-    if left_events.is_empty() && state.store.run_summary(left).await.map_err(|e| e.to_string())?.is_none() {
+    if left_events.is_empty()
+        && state
+            .store
+            .run_summary(left)
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none()
+    {
         return Err(format!("run {left} was not found"));
     }
-    if right_events.is_empty() && state.store.run_summary(right).await.map_err(|e| e.to_string())?.is_none() {
+    if right_events.is_empty()
+        && state
+            .store
+            .run_summary(right)
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none()
+    {
         return Err(format!("run {right} was not found"));
     }
     Ok(json!({
@@ -100,7 +155,10 @@ async fn get_harness_capabilities(
         .registry
         .get(id)
         .ok_or_else(|| format!("harness `{harness}` is not registered"))?;
-    let report = adapter.capabilities().await.map_err(|error| error.to_string())?;
+    let report = adapter
+        .capabilities()
+        .await
+        .map_err(|error| error.to_string())?;
     let mut capabilities = Map::new();
     for (capability, evidence) in report.capabilities {
         capabilities.insert(
@@ -130,7 +188,14 @@ async fn export_run_sanitized(
         .load_run_events(run_id)
         .await
         .map_err(|error| error.to_string())?;
-    if events.is_empty() && state.store.run_summary(run_id).await.map_err(|e| e.to_string())?.is_none() {
+    if events.is_empty()
+        && state
+            .store
+            .run_summary(run_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none()
+    {
         return Err(format!("run {run_id} was not found"));
     }
     let events = sanitize_events(events, raw.unwrap_or(false), &state.redactor)?;
@@ -160,6 +225,13 @@ fn database_location(state: State<'_, AppState>) -> String {
     state.database_path.to_string_lossy().into_owned()
 }
 
+fn sanitize_event(event: EventEnvelope, redactor: &Redactor) -> Result<EventEnvelope, String> {
+    let mut value = serde_json::to_value(event).map_err(|error| error.to_string())?;
+    redact_sensitive_paths(&mut value, redactor);
+    redactor.redact_json(&mut value);
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
 fn sanitize_events(
     events: Vec<EventEnvelope>,
     include_raw: bool,
@@ -168,11 +240,7 @@ fn sanitize_events(
     events
         .into_iter()
         .map(|event| {
-            let mut value = serde_json::to_value(event).map_err(|error| error.to_string())?;
-            redact_sensitive_paths(&mut value, redactor);
-            redactor.redact_json(&mut value);
-            let mut event: EventEnvelope =
-                serde_json::from_value(value).map_err(|error| error.to_string())?;
+            let mut event = sanitize_event(event, redactor)?;
             if !include_raw {
                 event.raw_source = None;
             }
@@ -345,6 +413,7 @@ fn main() {
             get_run,
             get_run_events,
             get_run_stats,
+            import_trace,
             compare_runs,
             get_harness_capabilities,
             export_run_sanitized,
