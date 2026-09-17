@@ -16,3 +16,6 @@ agenttrace-storage = { path = "../../../crates/agenttrace-storage" }
 serde_json = "1"
 tauri = "2"
 uuid = { version = "1", features = ["serde"] }
+
+# Keep the desktop runtime independent from the core workspace MSRV.
+[workspace]
