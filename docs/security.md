@@ -1,33 +1,46 @@
 # Security and privacy model
 
-AgentTrace observes developer tools, so a trace can contain credentials, private source code, prompts, customer data, command output, or filesystem paths. Security defaults are therefore part of the trace protocol, not an export-only afterthought.
+AgentTrace observes developer tools, so a trace can contain credentials, private source code, prompts, customer data, command output, or filesystem paths. Security defaults are therefore part of the trace pipeline, not an export-only afterthought.
 
-## Defaults
+## Current defaults
 
-- Local-only storage. No automatic upload or remote telemetry from AgentTrace.
-- Environment variables are **not captured by default**. A user or adapter must explicitly allow individual variable names, and values still pass through redaction.
-- Raw harness payloads pass through redaction before durable storage when raw retention is enabled.
-- Known secret patterns and sensitive JSON keys are replaced with `[REDACTED]`.
-- Sensitive paths such as `.ssh`, `.aws`, `.gnupg`, `.kube`, and `.env` are excluded from content capture by default. Metadata policy can be configured separately from content capture.
-- CLI process supervision invokes executables directly; AgentTrace does not concatenate untrusted arguments into a shell command.
-- Export sanitization runs a second redaction pass because redaction rules can change after ingestion.
+- AgentTrace storage is local SQLite. The project does not require a cloud account and does not implement automatic trace upload.
+- AgentTrace does **not record a snapshot of the caller's environment by default**. The redaction crate also provides a deny-by-default `EnvironmentPolicy` helper for explicitly selected environment values.
+- Normal supervised harness processes inherit the caller's environment unless an adapter explicitly asks `ProcessSpec` to clear it. This preserves the real harness execution environment; inheritance is different from recording those variables into the trace.
+- The normal CLI run/import path serializes each normalized event, applies recursive secret/path redaction, then persists the redacted event.
+- Known secret patterns and sensitive JSON keys are replaced with `[REDACTED]` by the built-in redactor.
+- Strings that resolve to configured sensitive path components such as `.ssh`, `.aws`, `.gnupg`, `.kube`, and `.env` are redacted by the CLI persistence path. This is not a general filesystem access-control mechanism.
+- CLI process supervision invokes executables through structured program/argument fields. Harness-specific adapters may legitimately request a shell when that is the upstream interface they are tracing.
+- Exports currently serialize the already-redacted records stored in SQLite. There is not a second independent export-time redaction pass yet, so the database itself must be treated as sensitive data.
+
+Static redaction cannot guarantee removal of every secret format. A harness can emit arbitrary source code, prompts, file contents, tokens in unknown formats, or proprietary data. Treat trace databases, JSONL exports, screenshots, and raw-source views as sensitive engineering artifacts.
 
 ## Provenance is a security feature
 
-AgentTrace does not infer secret-bearing context merely to make a trace appear complete. If a harness does not expose the model request or context contents, those fields are unavailable. Side-channel reconstruction of prompts or credentials is out of scope.
+AgentTrace does not infer secret-bearing context merely to make a trace appear complete. If a harness does not expose model request bodies or context contents, those fields are marked unavailable rather than reconstructed through side channels.
 
 ## Raw payload warning
 
-Native structured streams can contain more than the visible UI. A raw event may include tool inputs, model messages, file contents, headers, or extension data. The desktop UI and CLI must show a clear raw-payload warning and make raw export opt-in for sanitized sharing.
+Native structured streams can contain more than the visible harness UI. A raw event may include tool inputs, model messages, file contents, headers, extension state, or command output. Raw-source records stored through the CLI are redacted before persistence, but they can still contain sensitive information not matched by built-in rules.
+
+The CLI hides raw-source data in `inspect` output unless `--raw` is supplied. The desktop inspector has an explicit raw-source visibility control.
 
 ## Replay
 
-Replay is denied by default for operations with side effects. Explicit confirmation is required for shell writes, file writes, Git mutations, network requests, external service calls, and credentialed operations. A trace imported from another machine never grants replay permission.
+Replay is dry-run-first and only considers recorded `shell.command` events. Execution requires `--execute` plus an exact command or sequence allowlist.
+
+Allowed commands execute in a temporary detached Git worktree, with a scrubbed environment and a per-command timeout. This protects normal repository state from ordinary replayed file changes, but it is **not an OS sandbox**. An allowlisted command still runs as the current user and can deliberately access paths, processes, sockets, or network resources outside the worktree if the operating system allows it.
+
+Imported traces never grant replay permission automatically.
+
+## Local API
+
+`agenttrace-server` binds to loopback by default. A non-loopback bind is rejected unless `--allow-remote` is explicitly supplied. AgentTrace does not currently provide authentication or TLS for the local API; remote exposure therefore requires an external trusted boundary and should not be enabled casually.
 
 ## Encryption
 
-Encrypted local storage is a planned optional layer. It is not claimed as implemented until key management, rotation, recovery, and cross-platform secure-key storage are designed and tested. Filesystem-level encryption remains compatible with AgentTrace today.
+Application-level encrypted trace storage is not implemented. Filesystem- or volume-level encryption can protect an AgentTrace database at rest today. AgentTrace should not claim application-level encryption until key storage, rotation, recovery, and cross-platform behavior are implemented and tested.
 
 ## Reporting vulnerabilities
 
-Do not open a public issue for a vulnerability that could expose credentials, source, or trace data. Follow `SECURITY.md` once the disclosure contact/process is published in the repository.
+Do not publish vulnerabilities that could expose credentials, source code, or private trace data. Follow the private reporting path in [`../SECURITY.md`](../SECURITY.md).
