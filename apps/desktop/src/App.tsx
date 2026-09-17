@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ImportPanel } from "./components/ImportPanel";
+import { ThemeControl } from "./components/ThemeControl";
+import { TraceCharts } from "./components/TraceCharts";
 import {
   compareRuns,
   databaseLocation,
@@ -18,11 +21,11 @@ import type {
   RunSummary,
 } from "./types";
 
-type Category = "all" | "model" | "tool" | "shell" | "file" | "mcp" | "subagent" | "context" | "error";
+type Category = "all" | "model" | "tool" | "shell" | "file" | "browser" | "mcp" | "subagent" | "context" | "error";
 type InspectorTab = "payload" | "raw" | "execution" | "terminal" | "diff" | "relations";
 type DiffMode = "unified" | "split";
 
-const categories: Category[] = ["all", "model", "tool", "shell", "file", "mcp", "subagent", "context", "error"];
+const categories: Category[] = ["all", "model", "tool", "shell", "file", "browser", "mcp", "subagent", "context", "error"];
 const inspectorTabs: InspectorTab[] = ["payload", "raw", "execution", "terminal", "diff", "relations"];
 
 function eventCategory(kind: string): Category {
@@ -30,6 +33,7 @@ function eventCategory(kind: string): Category {
   if (kind.startsWith("tool.")) return "tool";
   if (kind.startsWith("shell.") || kind.startsWith("process.")) return "shell";
   if (kind.startsWith("file.") || kind.startsWith("git.")) return "file";
+  if (kind.startsWith("browser.")) return "browser";
   if (kind.startsWith("mcp.")) return "mcp";
   if (kind.startsWith("subagent.")) return "subagent";
   if (kind.startsWith("context.")) return "context";
@@ -253,6 +257,13 @@ export default function App() {
           <input value={runQuery} onChange={(event) => setRunQuery(event.target.value)} placeholder="Filter runs…" aria-label="Filter runs" />
           <button className="icon-button" onClick={() => void refreshRuns()} title="Refresh runs">↻</button>
         </div>
+        <ImportPanel
+          onImported={async (runId, eventCount) => {
+            await refreshRuns();
+            if (eventCount > 0) setSelectedRunId(runId);
+          }}
+          onError={setError}
+        />
         <div className="run-list">
           {visibleRuns.map((run) => (
             <button key={run.run_id} className={`run-row ${run.run_id === selectedRunId ? "selected" : ""}`} onClick={() => setSelectedRunId(run.run_id)}>
@@ -274,6 +285,7 @@ export default function App() {
           </div>
           <div className="top-actions">
             {selectedRun && <button className="secondary-button" onClick={() => void exportSanitized()}>Export sanitized</button>}
+            <ThemeControl />
             <label className="toggle"><input type="checkbox" checked={rawVisible} onChange={(event) => setRawVisible(event.target.checked)} /><span>Raw source</span></label>
             <span className="local-badge">● local only</span>
           </div>
@@ -284,8 +296,8 @@ export default function App() {
         {!selectedRun ? (
           <section className="empty-state">
             <div className="empty-glyph">⌁</div>
-            <h2>Record your first agent trace</h2>
-            <p>AgentTrace never invents missing telemetry. Run a supported harness and inspect the evidence it actually exposes.</p>
+            <h2>Record or import an agent trace</h2>
+            <p>AgentTrace never invents missing telemetry. Record a supported harness or import an existing structured trace/session from the sidebar.</p>
             <code>agenttrace run --harness codex -- codex exec "fix the failing test"</code>
           </section>
         ) : (
@@ -299,6 +311,7 @@ export default function App() {
               <Metric label="Errors" value={String((stats?.event_kinds?.error ?? 0) + (stats?.event_kinds?.["run.failed"] ?? 0))} />
             </section>
 
+            <TraceCharts stats={stats} events={events} />
             <CapabilityStrip report={capabilities} />
             <ComparisonPanel runs={runs} selectedRunId={selectedRunId!} comparisonRunId={comparisonRunId} setComparisonRunId={setComparisonRunId} comparison={comparison} />
 
