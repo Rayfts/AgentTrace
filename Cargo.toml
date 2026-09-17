@@ -7,6 +7,8 @@ members = [
   "crates/agenttrace-redaction",
   "crates/agenttrace-process",
   "crates/agenttrace-collector",
+  "crates/adapters/common",
+  "crates/adapters/codex",
 ]
 
 [workspace.package]
