@@ -1,11 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { databaseLocation, listRuns, loadEvents, loadStats } from "./lib/agenttrace";
-import type { EventEnvelope, RunStats, RunSummary } from "./types";
+import {
+  compareRuns,
+  databaseLocation,
+  exportSanitizedRun,
+  listArtifacts,
+  listRuns,
+  loadCapabilities,
+  loadEvents,
+  loadStats,
+} from "./lib/agenttrace";
+import type {
+  ArtifactMetadata,
+  CapabilityReport,
+  EventEnvelope,
+  RunComparison,
+  RunStats,
+  RunSummary,
+} from "./types";
 
 type Category = "all" | "model" | "tool" | "shell" | "file" | "mcp" | "subagent" | "context" | "error";
-type InspectorTab = "payload" | "raw" | "execution";
+type InspectorTab = "payload" | "raw" | "execution" | "terminal" | "diff" | "relations";
+type DiffMode = "unified" | "split";
 
 const categories: Category[] = ["all", "model", "tool", "shell", "file", "mcp", "subagent", "context", "error"];
+const inspectorTabs: InspectorTab[] = ["payload", "raw", "execution", "terminal", "diff", "relations"];
 
 function eventCategory(kind: string): Category {
   if (kind.startsWith("model.") || kind.startsWith("reasoning.")) return "model";
@@ -61,16 +79,26 @@ function aggregateCost(stats?: RunStats) {
   return entries.map(([currency, value]) => `${currency} ${value.toFixed(4)}`).join(" · ");
 }
 
+function sumCosts(stats?: RunStats) {
+  if (!stats) return 0;
+  return Object.values(stats.reported_or_deterministic_cost_by_currency).reduce((sum, value) => sum + value, 0);
+}
+
 export default function App() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const [events, setEvents] = useState<EventEnvelope[]>([]);
   const [stats, setStats] = useState<RunStats>();
+  const [capabilities, setCapabilities] = useState<CapabilityReport>();
+  const [artifacts, setArtifacts] = useState<ArtifactMetadata[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string>();
+  const [comparisonRunId, setComparisonRunId] = useState("");
+  const [comparison, setComparison] = useState<RunComparison>();
   const [category, setCategory] = useState<Category>("all");
   const [query, setQuery] = useState("");
   const [runQuery, setRunQuery] = useState("");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("payload");
+  const [diffMode, setDiffMode] = useState<DiffMode>("unified");
   const [rawVisible, setRawVisible] = useState(true);
   const [dbPath, setDbPath] = useState("");
   const [error, setError] = useState("");
@@ -83,16 +111,19 @@ export default function App() {
     }
   });
 
+  const selectedRun = runs.find((run) => run.run_id === selectedRunId);
+  const selectedEvent = events.find((event) => event.event_id === selectedEventId);
+
   const refreshRuns = useCallback(async () => {
     try {
       const next = await listRuns();
       setRuns(next);
-      if (!selectedRunId && next[0]) setSelectedRunId(next[0].run_id);
+      setSelectedRunId((current) => current ?? next[0]?.run_id);
       setError("");
     } catch (cause) {
       setError(String(cause));
     }
-  }, [selectedRunId]);
+  }, []);
 
   useEffect(() => {
     void refreshRuns();
@@ -109,15 +140,17 @@ export default function App() {
     if (!selectedRunId) {
       setEvents([]);
       setStats(undefined);
+      setArtifacts([]);
       return;
     }
     let active = true;
     setLoading(true);
-    Promise.all([loadEvents(selectedRunId, rawVisible), loadStats(selectedRunId)])
-      .then(([nextEvents, nextStats]) => {
+    Promise.all([loadEvents(selectedRunId, rawVisible), loadStats(selectedRunId), listArtifacts(selectedRunId)])
+      .then(([nextEvents, nextStats, nextArtifacts]) => {
         if (!active) return;
         setEvents(nextEvents);
         setStats(nextStats);
+        setArtifacts(nextArtifacts);
         setSelectedEventId((current) => current && nextEvents.some((event) => event.event_id === current) ? current : nextEvents[0]?.event_id);
         setError("");
       })
@@ -126,8 +159,29 @@ export default function App() {
     return () => { active = false; };
   }, [selectedRunId, rawVisible]);
 
-  const selectedRun = runs.find((run) => run.run_id === selectedRunId);
-  const selectedEvent = events.find((event) => event.event_id === selectedEventId);
+  useEffect(() => {
+    if (!selectedRun?.harness) {
+      setCapabilities(undefined);
+      return;
+    }
+    let active = true;
+    void loadCapabilities(selectedRun.harness)
+      .then((report) => active && setCapabilities(report))
+      .catch((cause) => active && setError(String(cause)));
+    return () => { active = false; };
+  }, [selectedRun?.harness]);
+
+  useEffect(() => {
+    if (!selectedRunId || !comparisonRunId || comparisonRunId === selectedRunId) {
+      setComparison(undefined);
+      return;
+    }
+    let active = true;
+    void compareRuns(selectedRunId, comparisonRunId)
+      .then((result) => active && setComparison(result))
+      .catch((cause) => active && setError(String(cause)));
+    return () => { active = false; };
+  }, [selectedRunId, comparisonRunId]);
 
   const visibleRuns = useMemo(() => {
     const normalized = runQuery.trim().toLowerCase();
@@ -153,6 +207,21 @@ export default function App() {
       localStorage.setItem("agenttrace.bookmarks", JSON.stringify([...next]));
       return next;
     });
+  };
+
+  const exportSanitized = async () => {
+    if (!selectedRunId) return;
+    try {
+      const body = await exportSanitizedRun(selectedRunId, false);
+      const url = URL.createObjectURL(new Blob([body], { type: "application/x-ndjson" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `agenttrace-${selectedRunId}.jsonl`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (cause) {
+      setError(String(cause));
+    }
   };
 
   return (
@@ -186,6 +255,7 @@ export default function App() {
             <h1>{selectedRun ? compactId(selectedRun.run_id) : "No run selected"}</h1>
           </div>
           <div className="top-actions">
+            {selectedRun && <button className="secondary-button" onClick={() => void exportSanitized()}>Export sanitized</button>}
             <label className="toggle"><input type="checkbox" checked={rawVisible} onChange={(event) => setRawVisible(event.target.checked)} /><span>Raw source</span></label>
             <span className="local-badge">● local only</span>
           </div>
@@ -210,6 +280,9 @@ export default function App() {
               <Metric label="Retries" value={String(stats?.event_kinds?.retry ?? 0)} />
               <Metric label="Errors" value={String((stats?.event_kinds?.error ?? 0) + (stats?.event_kinds?.["run.failed"] ?? 0))} />
             </section>
+
+            <CapabilityStrip report={capabilities} />
+            <ComparisonPanel runs={runs} selectedRunId={selectedRunId!} comparisonRunId={comparisonRunId} setComparisonRunId={setComparisonRunId} comparison={comparison} />
 
             <section className="trace-panel">
               <div className="trace-toolbar">
@@ -240,9 +313,11 @@ export default function App() {
 
                 <aside className="inspector">
                   <div className="inspector-tabs">
-                    {(["payload", "raw", "execution"] as InspectorTab[]).map((tab) => <button key={tab} className={inspectorTab === tab ? "active" : ""} onClick={() => setInspectorTab(tab)}>{tab}</button>)}
+                    {inspectorTabs.map((tab) => <button key={tab} className={inspectorTab === tab ? "active" : ""} onClick={() => setInspectorTab(tab)}>{tab}</button>)}
                   </div>
-                  {selectedEvent ? <EventInspector event={selectedEvent} tab={inspectorTab} /> : <div className="empty-inspector">Select an event.</div>}
+                  {selectedEvent ? (
+                    <EventInspector event={selectedEvent} events={events} artifacts={artifacts} tab={inspectorTab} diffMode={diffMode} setDiffMode={setDiffMode} />
+                  ) : <div className="empty-inspector">Select an event.</div>}
                 </aside>
               </div>
             </section>
@@ -257,26 +332,136 @@ function Metric({ label, value, mono = false }: { label: string; value: string; 
   return <div className="metric"><span>{label}</span><strong className={mono ? "mono" : ""}>{value}</strong></div>;
 }
 
-function EventInspector({ event, tab }: { event: EventEnvelope; tab: InspectorTab }) {
+function CapabilityStrip({ report }: { report?: CapabilityReport }) {
+  if (!report) return null;
+  const entries = Object.entries(report.capabilities).sort(([a], [b]) => a.localeCompare(b));
+  return <section className="capability-panel">
+    <div className="panel-heading"><span>Capability evidence</span><small>{report.integration_modes.join(" · ")}</small></div>
+    <div className="capability-list">
+      {entries.map(([name, evidence]) => <span key={name} className={`capability-chip ${evidence.provenance}`} title={`${evidence.source}${evidence.notes ? ` — ${evidence.notes}` : ""}`}>
+        <i />{name.replaceAll("_", " ")}<b>{evidence.provenance}</b>
+      </span>)}
+    </div>
+  </section>;
+}
+
+function ComparisonPanel({ runs, selectedRunId, comparisonRunId, setComparisonRunId, comparison }: {
+  runs: RunSummary[];
+  selectedRunId: string;
+  comparisonRunId: string;
+  setComparisonRunId: (value: string) => void;
+  comparison?: RunComparison;
+}) {
+  const left = comparison?.left.stats;
+  const right = comparison?.right.stats;
+  return <section className="comparison-panel">
+    <div className="comparison-select">
+      <span>Compare run</span>
+      <select value={comparisonRunId} onChange={(event) => setComparisonRunId(event.target.value)}>
+        <option value="">None</option>
+        {runs.filter((run) => run.run_id !== selectedRunId).map((run) => <option key={run.run_id} value={run.run_id}>{run.harness} · {compactId(run.run_id)}</option>)}
+      </select>
+    </div>
+    {left && right && <div className="comparison-metrics">
+      <CompareMetric label="Events" left={left.event_count} right={right.event_count} />
+      <CompareMetric label="Observed tokens" left={aggregateTokens(left)} right={aggregateTokens(right)} />
+      <CompareMetric label="Retries" left={left.event_kinds.retry ?? 0} right={right.event_kinds.retry ?? 0} />
+      <CompareMetric label="Errors" left={(left.event_kinds.error ?? 0) + (left.event_kinds["run.failed"] ?? 0)} right={(right.event_kinds.error ?? 0) + (right.event_kinds["run.failed"] ?? 0)} />
+      <CompareMetric label="Reported cost sum" left={sumCosts(left)} right={sumCosts(right)} decimals={4} />
+    </div>}
+  </section>;
+}
+
+function CompareMetric({ label, left, right, decimals = 0 }: { label: string; left: number; right: number; decimals?: number }) {
+  const delta = right - left;
+  const format = (value: number) => decimals ? value.toFixed(decimals) : value.toLocaleString();
+  return <div className="compare-metric"><span>{label}</span><code>{format(left)} → {format(right)}</code><small>{delta >= 0 ? "+" : ""}{format(delta)}</small></div>;
+}
+
+function EventInspector({ event, events, artifacts, tab, diffMode, setDiffMode }: {
+  event: EventEnvelope;
+  events: EventEnvelope[];
+  artifacts: ArtifactMetadata[];
+  tab: InspectorTab;
+  diffMode: DiffMode;
+  setDiffMode: (mode: DiffMode) => void;
+}) {
   if (tab === "raw") return <JsonBlock value={event.raw_source ?? { unavailable: true, reason: "raw source not exposed or hidden" }} />;
-  if (tab === "execution") {
-    return <div className="inspector-content">
-      <InspectorField label="Event ID" value={event.event_id} />
-      <InspectorField label="Source" value={event.provenance.source} />
-      <InspectorField label="Model" value={event.model ? `${event.model.provider ? `${event.model.provider}/` : ""}${event.model.id}` : "unavailable"} />
-      <InspectorField label="Duration" value={fmtDuration(event.duration_ns)} />
-      {event.command && <><h3>Command</h3><JsonBlock value={event.command} /></>}
-      {event.filesystem_impact && <><h3>Filesystem impact</h3><JsonBlock value={event.filesystem_impact} /></>}
-      {event.usage && <><h3>Usage</h3><JsonBlock value={event.usage} /></>}
-      {event.cost && <><h3>Cost</h3><JsonBlock value={event.cost} /></>}
-      {event.error && <><h3>Error</h3><JsonBlock value={event.error} /></>}
-    </div>;
-  }
+  if (tab === "execution") return <ExecutionInspector event={event} />;
+  if (tab === "terminal") return <TerminalInspector event={event} />;
+  if (tab === "diff") return <DiffInspector event={event} mode={diffMode} setMode={setDiffMode} />;
+  if (tab === "relations") return <RelationsInspector selected={event} events={events} artifacts={artifacts} />;
   return <div className="inspector-content">
     <div className="event-title"><span className={`provenance ${event.provenance.level}`}>{event.provenance.level}</span><strong>{event.kind}</strong></div>
     {event.provenance.notes && <p className="evidence-note">{event.provenance.notes}</p>}
     <JsonBlock value={event.payload} />
   </div>;
+}
+
+function ExecutionInspector({ event }: { event: EventEnvelope }) {
+  return <div className="inspector-content">
+    <InspectorField label="Event ID" value={event.event_id} />
+    <InspectorField label="Span" value={event.span_id ?? "unavailable"} />
+    <InspectorField label="Parent" value={event.parent_span_id ?? "unavailable"} />
+    <InspectorField label="Source" value={event.provenance.source} />
+    <InspectorField label="Model" value={event.model ? `${event.model.provider ? `${event.model.provider}/` : ""}${event.model.id}` : "unavailable"} />
+    <InspectorField label="Duration" value={fmtDuration(event.duration_ns)} />
+    {event.command && <><h3>Command</h3><JsonBlock value={event.command} /></>}
+    {event.filesystem_impact && <><h3>Filesystem impact</h3><JsonBlock value={event.filesystem_impact} /></>}
+    {event.usage && <><h3>Usage</h3><JsonBlock value={event.usage} /></>}
+    {event.cost && <><h3>Cost</h3><JsonBlock value={event.cost} /></>}
+    {event.error && <><h3>Error</h3><JsonBlock value={event.error} /></>}
+  </div>;
+}
+
+function TerminalInspector({ event }: { event: EventEnvelope }) {
+  const text = findText(event.payload, ["aggregated_output", "stdout", "stderr", "output", "text", "message"])
+    ?? (event.command ? [event.command.program, ...event.command.args].join(" ") : undefined);
+  return <div className="inspector-content">
+    <h3>Terminal evidence</h3>
+    {text ? <pre className="terminal-block">{text}</pre> : <Unavailable message="This event does not expose terminal text." />}
+  </div>;
+}
+
+function DiffInspector({ event, mode, setMode }: { event: EventEnvelope; mode: DiffMode; setMode: (mode: DiffMode) => void }) {
+  const diff = extractDiff(event);
+  return <div className="inspector-content">
+    <div className="diff-toolbar"><span>Patch evidence</span><div><button className={mode === "unified" ? "active" : ""} onClick={() => setMode("unified")}>Unified</button><button className={mode === "split" ? "active" : ""} onClick={() => setMode("split")}>Side by side</button></div></div>
+    {!diff ? <Unavailable message="No unified diff/patch text is exposed on this event." /> : mode === "unified" ? <UnifiedDiff diff={diff} /> : <SplitDiff diff={diff} />}
+  </div>;
+}
+
+function UnifiedDiff({ diff }: { diff: string }) {
+  return <pre className="diff-block">{diff.split("\n").map((line, index) => <span key={index} className={diffLineClass(line)}>{line || " "}{"\n"}</span>)}</pre>;
+}
+
+function SplitDiff({ diff }: { diff: string }) {
+  const rows = splitDiffRows(diff);
+  return <div className="split-diff">
+    <div className="split-head"><span>Before</span><span>After</span></div>
+    {rows.map((row, index) => <div className="split-row" key={index}><code className={row.leftClass}>{row.left || " "}</code><code className={row.rightClass}>{row.right || " "}</code></div>)}
+  </div>;
+}
+
+function RelationsInspector({ selected, events, artifacts }: { selected: EventEnvelope; events: EventEnvelope[]; artifacts: ArtifactMetadata[] }) {
+  const spans = buildSpanRows(events);
+  const subagents = events.filter((event) => event.kind.startsWith("subagent."));
+  const contexts = events.filter((event) => event.kind.startsWith("context."));
+  const linkedArtifacts = artifacts.filter((artifact) => !artifact.event_id || artifact.event_id === selected.event_id);
+  return <div className="inspector-content relation-view">
+    <h3>Span tree</h3>
+    {spans.length ? <div className="relation-list">{spans.map((row) => <div key={row.spanId} className={row.spanId === selected.span_id ? "relation-row selected-relation" : "relation-row"} style={{ paddingLeft: 8 + row.depth * 14 }}><code>{compactId(row.spanId)}</code><span>{row.label}</span><small>{row.count} event{row.count === 1 ? "" : "s"}</small></div>)}</div> : <Unavailable message="This run does not expose span IDs." />}
+    <h3>Subagents</h3>
+    {subagents.length ? <RelationEvents events={subagents} /> : <Unavailable message="No subagent lifecycle events are exposed for this run." />}
+    <h3>Context provenance</h3>
+    {contexts.length ? <RelationEvents events={contexts} /> : <Unavailable message="No explicit context lifecycle events are exposed for this run." />}
+    <h3>Artifacts</h3>
+    {linkedArtifacts.length ? <div className="artifact-list">{linkedArtifacts.map((artifact) => <div key={artifact.artifact_id}><strong>{artifact.name}</strong><span>{artifact.kind} · {artifact.original_size.toLocaleString()} bytes</span><code>sha256:{artifact.content_sha256.slice(0, 16)}…</code></div>)}</div> : <Unavailable message="No stored artifact metadata is linked to this event/run." />}
+  </div>;
+}
+
+function RelationEvents({ events }: { events: EventEnvelope[] }) {
+  return <div className="relation-list">{events.map((event) => <div key={event.event_id} className="relation-row"><code>#{event.sequence}</code><span>{event.kind}</span><small className={`provenance ${event.provenance.level}`}>{event.provenance.level}</small></div>)}</div>;
 }
 
 function InspectorField({ label, value }: { label: string; value: string }) {
@@ -285,4 +470,117 @@ function InspectorField({ label, value }: { label: string; value: string }) {
 
 function JsonBlock({ value }: { value: unknown }) {
   return <pre className="json-block">{JSON.stringify(value, null, 2)}</pre>;
+}
+
+function Unavailable({ message }: { message: string }) {
+  return <div className="unavailable-box">unavailable · {message}</div>;
+}
+
+function findText(value: unknown, keys: string[], depth = 0): string | undefined {
+  if (depth > 4 || value == null) return undefined;
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findText(item, keys, depth + 1);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    for (const key of keys) {
+      if (typeof object[key] === "string") return object[key] as string;
+    }
+    for (const child of Object.values(object)) {
+      const found = findText(child, keys, depth + 1);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+function extractDiff(event: EventEnvelope): string | undefined {
+  const keys = ["unified_diff", "patch", "diff"];
+  const payloadDiff = findText(event.payload, keys);
+  if (payloadDiff && looksLikeDiff(payloadDiff)) return payloadDiff;
+  const rawDiff = findText(event.raw_source?.data, keys);
+  if (rawDiff && looksLikeDiff(rawDiff)) return rawDiff;
+  return undefined;
+}
+
+function looksLikeDiff(value: string) {
+  return value.includes("@@") || (value.includes("\n+") && value.includes("\n-")) || value.startsWith("diff --git");
+}
+
+function diffLineClass(line: string) {
+  if (line.startsWith("@@")) return "diff-hunk";
+  if (line.startsWith("+++ ") || line.startsWith("--- ") || line.startsWith("diff --git")) return "diff-meta";
+  if (line.startsWith("+")) return "diff-add";
+  if (line.startsWith("-")) return "diff-del";
+  return "diff-context";
+}
+
+type SplitRow = { left: string; right: string; leftClass: string; rightClass: string };
+
+function splitDiffRows(diff: string): SplitRow[] {
+  const rows: SplitRow[] = [];
+  const deleted: string[] = [];
+  const added: string[] = [];
+  const flush = () => {
+    const count = Math.max(deleted.length, added.length);
+    for (let index = 0; index < count; index += 1) rows.push({ left: deleted[index] ?? "", right: added[index] ?? "", leftClass: "diff-del", rightClass: "diff-add" });
+    deleted.length = 0;
+    added.length = 0;
+  };
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("diff --git") || line.startsWith("index ")) {
+      flush();
+      rows.push({ left: line, right: line, leftClass: "diff-meta", rightClass: "diff-meta" });
+    } else if (line.startsWith("@@")) {
+      flush();
+      rows.push({ left: line, right: line, leftClass: "diff-hunk", rightClass: "diff-hunk" });
+    } else if (line.startsWith("-") && !line.startsWith("---")) deleted.push(line.slice(1));
+    else if (line.startsWith("+") && !line.startsWith("+++")) added.push(line.slice(1));
+    else {
+      flush();
+      const context = line.startsWith(" ") ? line.slice(1) : line;
+      rows.push({ left: context, right: context, leftClass: "diff-context", rightClass: "diff-context" });
+    }
+  }
+  flush();
+  return rows;
+}
+
+type SpanRow = { spanId: string; depth: number; label: string; count: number };
+
+function buildSpanRows(events: EventEnvelope[]): SpanRow[] {
+  const groups = new Map<string, EventEnvelope[]>();
+  for (const event of events) {
+    if (!event.span_id) continue;
+    const group = groups.get(event.span_id) ?? [];
+    group.push(event);
+    groups.set(event.span_id, group);
+  }
+  if (!groups.size) return [];
+  const parentBySpan = new Map<string, string | undefined>();
+  for (const [spanId, group] of groups) parentBySpan.set(spanId, group.find((event) => event.parent_span_id)?.parent_span_id);
+  const children = new Map<string, string[]>();
+  const roots: string[] = [];
+  for (const spanId of groups.keys()) {
+    const parent = parentBySpan.get(spanId);
+    if (!parent || !groups.has(parent)) roots.push(spanId);
+    else children.set(parent, [...(children.get(parent) ?? []), spanId]);
+  }
+  const rows: SpanRow[] = [];
+  const seen = new Set<string>();
+  const visit = (spanId: string, depth: number) => {
+    if (seen.has(spanId)) return;
+    seen.add(spanId);
+    const group = groups.get(spanId) ?? [];
+    rows.push({ spanId, depth, label: group[0]?.kind ?? "span", count: group.length });
+    for (const child of children.get(spanId) ?? []) visit(child, depth + 1);
+  };
+  for (const root of roots) visit(root, 0);
+  for (const spanId of groups.keys()) visit(spanId, 0);
+  return rows;
 }
