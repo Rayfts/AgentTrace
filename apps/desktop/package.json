@@ -2,6 +2,8 @@
   "name": "@agenttrace/desktop",
   "private": true,
   "version": "0.1.0",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/Rayfts/AgentTrace",
   "type": "module",
   "scripts": {
     "dev": "vite",
