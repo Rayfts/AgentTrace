@@ -241,6 +241,8 @@ pub struct EventEnvelope {
     pub monotonic_ns: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ns: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ns: Option<u64>,
     pub harness: HarnessId,
     pub integration_mode: IntegrationMode,
     pub provenance: Provenance,
@@ -287,6 +289,7 @@ impl EventEnvelope {
             timestamp: Utc::now(),
             monotonic_ns: None,
             duration_ns: None,
+            latency_ns: None,
             harness,
             integration_mode,
             provenance,
@@ -351,5 +354,6 @@ mod tests {
             vec!["usage.reasoning_output_tokens"]
         );
         assert_eq!(decoded.schema_version, SCHEMA_VERSION);
+        assert_eq!(decoded.latency_ns, None);
     }
 }
