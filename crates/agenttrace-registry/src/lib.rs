@@ -199,9 +199,7 @@ impl AdapterRegistry {
 
 #[cfg(test)]
 mod tests {
-    use agenttrace_protocol::{
-        EventEnvelope, EventKind, Provenance, ProvenanceLevel,
-    };
+    use agenttrace_protocol::{EventEnvelope, EventKind, Provenance, ProvenanceLevel};
     use serde_json::json;
     use uuid::Uuid;
 
@@ -242,7 +240,10 @@ mod tests {
         assert_eq!(
             implemented_modes(
                 HarnessId::RooCode,
-                vec![IntegrationMode::SessionImport, IntegrationMode::FilesystemWatch],
+                vec![
+                    IntegrationMode::SessionImport,
+                    IntegrationMode::FilesystemWatch,
+                ],
             ),
             vec![IntegrationMode::SessionImport]
         );
