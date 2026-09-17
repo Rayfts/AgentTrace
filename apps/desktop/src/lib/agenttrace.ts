@@ -3,6 +3,7 @@ import type {
   ArtifactMetadata,
   CapabilityReport,
   EventEnvelope,
+  ImportResult,
   RunComparison,
   RunStats,
   RunSummary,
@@ -22,6 +23,10 @@ export async function loadEvents(runId: string, raw = true): Promise<EventEnvelo
 
 export async function loadStats(runId: string): Promise<RunStats> {
   return invoke<RunStats>("get_run_stats", { runId });
+}
+
+export async function importTrace(harness: string, path: string): Promise<ImportResult> {
+  return invoke<ImportResult>("import_trace", { harness, path });
 }
 
 export async function loadCapabilities(harness: string): Promise<CapabilityReport> {
