@@ -2,11 +2,11 @@
 
 AgentTrace is a local-first debugger, recorder, profiler, and observability platform for AI coding agents.
 
-When an agent changes a repository, AgentTrace records the evidence needed to inspect **what actually happened**: model interactions where exposed, tool activity, shell commands, terminal output, file changes, MCP activity, subagents, context changes, retries, failures, timing, token/cost samples, raw harness events, and stored artifacts.
+When an agent changes a repository, AgentTrace records the evidence needed to inspect **what actually happened**: model interactions where exposed, tool activity, shell commands, terminal output, file changes, Git activity, browser activity when explicitly exposed, MCP activity, subagents, context changes, retries, failures, timing, token/cost samples, raw harness events, and stored artifacts.
 
-AgentTrace does not force ten different runtimes into a fictional common API. Product-facing capability reports enumerate all supported telemetry categories and mark each one `native`, `inferred`, `derived`, or `unavailable`. Researched upstream integration surfaces are not advertised as implemented until AgentTrace has a real collector/control path for them.
+AgentTrace does not force ten different runtimes into a fictional common API. Product-facing capability reports enumerate all supported adapter capability categories and mark each one `native`, `inferred`, `derived`, or `unavailable`. Researched upstream integration surfaces are not advertised as implemented until AgentTrace has a real collector/control path for them.
 
-> **Status:** pre-1.0. The core protocol, local storage, artifacts, redaction profiles, ten initial adapters, CLI, replay engine, local API, adapter contract fixtures, benchmark suite, and Tauri/React inspector are implemented on the current development line. Compatibility may still change before the first stable release.
+> **Status:** pre-1.0. The schema-v2 protocol, local storage, artifacts, redaction profiles, ten initial adapters, CLI, replay engine, local API, adapter contract fixtures, benchmark suite, and Tauri/React inspector are implemented on the current development line. Compatibility may still change before the first stable release.
 
 ## Telemetry truth model
 
@@ -18,6 +18,8 @@ Every normalized event carries provenance:
 - **unavailable** — not exposed reliably enough to claim.
 
 AgentTrace never upgrades missing telemetry into a guess. Unknown structured records are preserved conservatively where safe so normalization can improve later without pretending an older collector observed something it did not.
+
+Protocol schema v2 also reserves `browser.navigation`, `browser.action`, `browser.network`, and `browser.console`. Those names make browser evidence representable without authorizing adapters to invent it: an adapter emits `browser.*` only when its upstream surface explicitly identifies browser activity.
 
 ## Supported harnesses
 
@@ -108,7 +110,9 @@ Replay is deliberately narrower than “rerun the agent.” Only recorded `shell
 agenttrace replay <run-id> --repo /path/to/repository
 ```
 
-Execution requires `--execute` plus an exact command or sequence allowlist:
+The dry-run plan attaches conservative risk tags such as `filesystem_mutation`, `git_mutation`, `network_access`, `external_service`, and `credential_sensitive` when recognizable. These tags are advisory visibility, not an execution grant or sandbox.
+
+Execution still requires `--execute` plus an exact command or sequence allowlist:
 
 ```bash
 agenttrace replay <run-id> \
@@ -117,7 +121,7 @@ agenttrace replay <run-id> \
   --allow "cargo test"
 ```
 
-Replay runs in a temporary detached Git worktree with a scrubbed environment and a per-command timeout. This protects normal repository state, but it is **not an operating-system sandbox**. See [`docs/replay.md`](docs/replay.md).
+An exact allowlist entry confirms that specific recorded command together with the risk tags displayed in the plan. Replay runs in a temporary detached Git worktree with a scrubbed environment and a per-command timeout. This protects normal repository state, but it is **not an operating-system sandbox**. See [`docs/replay.md`](docs/replay.md).
 
 ## Local API
 
@@ -146,14 +150,17 @@ Run-scoped artifacts can be stored with optional event linkage, SHA-256 content 
 `apps/desktop` contains a Tauri v2 + React DevTools-style inspector with:
 
 - run history and live active-run refresh;
-- searchable/filterable timeline;
+- native file-picker trace/session import through the real adapter registry;
+- searchable/filterable timeline, including schema-v2 `browser.*` events when actually present;
 - complete capability evidence indicators;
+- observed-only token, event-distribution, and duration charts;
 - payload, raw, execution, terminal, diff, and relations inspectors;
 - unified and side-by-side diff rendering only when actual patch text is exposed;
 - span/subagent/context views only when corresponding trace evidence exists;
 - deterministic run comparison;
 - sanitized JSONL export;
 - artifact metadata;
+- System, Dark, and Light themes;
 - observed usage/cost/retry/error fields without fake precision.
 
 ```bash
@@ -180,7 +187,7 @@ Key documents:
 
 ## Performance benchmarks
 
-The deterministic large-trace suite expands `fixtures/benchmarks/large-trace.json` into 100,000 events and measures ingestion, full-trace loading, JSONL export, Rust-heap deltas, and Codex normalization throughput:
+The deterministic large-trace suite expands `fixtures/benchmarks/large-trace.json` into 100,000 schema-v2 events and measures ingestion, full-trace loading, JSONL export, Rust-heap deltas, and Codex normalization throughput:
 
 ```bash
 cargo run --release -p agenttrace-benchmarks
@@ -209,7 +216,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) before changing adapters or telemetry c
 
 ## Security and privacy
 
-Redaction is applied before normal event persistence and again on sharing/read surfaces; custom profiles can only add protections. Environment capture is deny-by-default, the API is loopback-first, replay is allowlisted, and no automatic cloud upload exists. Trace databases, artifacts, exports, and screenshots can still contain sensitive engineering data.
+Redaction is applied before normal event persistence and again on sharing/read surfaces; custom profiles can only add protections. Environment capture is deny-by-default, the API is loopback-first, replay is exact-allowlisted, and no automatic cloud upload exists. Trace databases, artifacts, exports, and screenshots can still contain sensitive engineering data.
 
 Application-level encrypted storage is not currently implemented; see [`docs/security.md`](docs/security.md).
 
