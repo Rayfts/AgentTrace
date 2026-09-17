@@ -6,14 +6,19 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[[bin]]
+name = "agenttrace-server"
+path = "src/main.rs"
+
 [dependencies]
 agenttrace-adapter-api = { path = "../agenttrace-adapter-api" }
 agenttrace-protocol = { path = "../agenttrace-protocol" }
 agenttrace-registry = { path = "../agenttrace-registry" }
 agenttrace-storage = { path = "../agenttrace-storage" }
 axum = { version = "0.8", features = ["json"] }
+clap = { version = "4", features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { version = "1", features = ["net", "rt-multi-thread", "signal"] }
+tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "signal"] }
 uuid.workspace = true
