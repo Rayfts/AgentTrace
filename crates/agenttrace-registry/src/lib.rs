@@ -14,8 +14,9 @@ use agenttrace_adapter_goose::GooseAdapter;
 use agenttrace_adapter_opencode::OpenCodeAdapter;
 use agenttrace_adapter_pi::PiAdapter;
 use agenttrace_adapter_roo_code::RooCodeAdapter;
-use agenttrace_protocol::{HarnessId, IntegrationMode};
+use agenttrace_protocol::{EventEnvelope, HarnessId, IntegrationMode};
 use async_trait::async_trait;
+use futures::StreamExt;
 
 #[derive(Clone)]
 pub struct AdapterRegistry {
@@ -62,7 +63,11 @@ impl HarnessAdapter for RegisteredAdapter {
     }
 
     async fn events(&self, run: &RunHandle) -> Result<EventStream, AdapterError> {
-        self.inner.events(run).await
+        let harness = self.id();
+        let stream = self.inner.events(run).await?;
+        Ok(Box::pin(stream.map(move |item| {
+            item.map(|event| materialize_event_fields(harness, event))
+        })))
     }
 
     async fn cancel(&self, run: &RunHandle) -> Result<(), AdapterError> {
@@ -70,7 +75,11 @@ impl HarnessAdapter for RegisteredAdapter {
     }
 
     async fn import(&self, request: ImportRequest) -> Result<EventStream, AdapterError> {
-        self.inner.import(request).await
+        let harness = self.id();
+        let stream = self.inner.import(request).await?;
+        Ok(Box::pin(stream.map(move |item| {
+            item.map(|event| materialize_event_fields(harness, event))
+        })))
     }
 }
 
@@ -95,6 +104,19 @@ fn materialize_unavailable_capabilities(report: &mut CapabilityReport) {
         let evidence = report.evidence(capability);
         report.capabilities.insert(capability, evidence);
     }
+}
+
+fn materialize_event_fields(harness: HarnessId, mut event: EventEnvelope) -> EventEnvelope {
+    if harness == HarnessId::ClaudeCode && event.latency_ns.is_none() {
+        if let Some(api_ms) = event
+            .attributes
+            .get("duration_api_ms")
+            .and_then(|value| value.as_u64())
+        {
+            event.latency_ns = Some(api_ms.saturating_mul(1_000_000));
+        }
+    }
+    event
 }
 
 fn registered<T>(adapter: T) -> Arc<dyn HarnessAdapter>
@@ -177,7 +199,11 @@ impl AdapterRegistry {
 
 #[cfg(test)]
 mod tests {
-    use agenttrace_protocol::ProvenanceLevel;
+    use agenttrace_protocol::{
+        EventEnvelope, EventKind, Provenance, ProvenanceLevel,
+    };
+    use serde_json::json;
+    use uuid::Uuid;
 
     use super::*;
 
@@ -235,5 +261,45 @@ mod tests {
             report.status(Capability::McpActivity),
             ProvenanceLevel::Unavailable
         );
+    }
+
+    #[test]
+    fn registry_promotes_verified_claude_api_latency() {
+        let mut event = EventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            HarnessId::ClaudeCode,
+            IntegrationMode::StructuredStream,
+            Provenance::native("claude fixture"),
+            EventKind::RunCompleted,
+            json!({}),
+        );
+        event
+            .attributes
+            .insert("duration_api_ms".into(), json!(900_u64));
+
+        let event = materialize_event_fields(HarnessId::ClaudeCode, event);
+        assert_eq!(event.latency_ns, Some(900_000_000));
+    }
+
+    #[test]
+    fn registry_does_not_invent_latency_for_other_harnesses() {
+        let mut event = EventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            HarnessId::Codex,
+            IntegrationMode::StructuredStream,
+            Provenance::native("fixture"),
+            EventKind::RunCompleted,
+            json!({}),
+        );
+        event
+            .attributes
+            .insert("duration_api_ms".into(), json!(900_u64));
+
+        let event = materialize_event_fields(HarnessId::Codex, event);
+        assert_eq!(event.latency_ns, None);
     }
 }
