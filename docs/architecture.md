@@ -10,19 +10,24 @@ The architecture separates **collection** from **normalization**. A collector re
 
 ```text
 crates/
-  agenttrace-protocol/       # versioned normalized event model
-  agenttrace-adapter-api/    # adapter traits and capability reporting
-  agenttrace-process/        # child process supervision
-  agenttrace-collector/      # ingestion helpers and sequencing
-  agenttrace-storage/        # SQLite, migrations, compression, run recovery
-  agenttrace-redaction/      # secret/path/environment-value filtering primitives
-  agenttrace-registry/       # built-in adapter registry
-  agenttrace-replay/         # dry-run-first allowlisted shell replay
-  agenttrace-cli/            # native agenttrace CLI
-  agenttrace-server/         # loopback-first local HTTP API + binary
-  adapters/*                 # harness-specific collectors/normalizers
+  agenttrace-protocol/          # versioned normalized event model
+  agenttrace-adapter-api/       # adapter traits and capability reporting
+  agenttrace-adapter-contracts/ # cross-adapter fixture and negative-capability tests
+  agenttrace-process/           # child process supervision
+  agenttrace-collector/         # ingestion helpers and sequencing
+  agenttrace-storage/           # SQLite, migrations, compression, run recovery
+  agenttrace-redaction/         # secret/path/environment-value filtering primitives
+  agenttrace-registry/          # built-in adapter registry
+  agenttrace-replay/            # dry-run-first allowlisted shell replay
+  agenttrace-cli/               # native agenttrace CLI
+  agenttrace-server/            # loopback-first local HTTP API + standalone binary
+  agenttrace-benchmarks/        # large-trace ingest/load/export/memory/normalization suite
+  adapters/*                    # harness-specific collectors/normalizers
+fixtures/
+  <harness>/                    # sanitized wire-format fixtures
+  benchmarks/                   # deterministic large-trace recipe
 apps/
-  desktop/                   # independent Tauri v2 + React/TypeScript inspector
+  desktop/                      # independent Tauri v2 + React/TypeScript inspector
 ```
 
 The desktop Tauri crate is intentionally a nested independent Cargo workspace so Tauri's runtime MSRV can move without raising the MSRV of the core Rust workspace.
@@ -35,7 +40,7 @@ The desktop Tauri crate is intentionally a nested independent Cargo workspace so
 4. **Normalization** creates `EventEnvelope` records and never upgrades provenance. A deterministic calculation from native data is `derived`, not `native`.
 5. **Redaction** is applied by the CLI ingestion/import path before events are appended to normal durable storage. Stored raw-source fields therefore contain the redacted form seen by the persistence layer.
 6. **Storage** appends events incrementally to SQLite in sequence order, compresses sufficiently large raw JSON blobs, maintains run summaries, and marks interrupted runs during recovery.
-7. **Query surfaces** read from the same `TraceStore`: the CLI, the loopback HTTP API, and the Tauri command layer.
+7. **Query surfaces** read from the same `TraceStore`: the CLI, the loopback HTTP API, and the Tauri command layer. CLI and HTTP export/read surfaces re-apply current redaction policy before returning trace data.
 8. **UI** renders stored evidence and does not synthesize unavailable telemetry client-side.
 
 Library consumers that call lower-level crates directly are responsible for applying the same redaction policy before persistence if they bypass the CLI path.
@@ -50,6 +55,8 @@ Sequence is authoritative for local ingestion order. Wall-clock time is useful f
 
 Raw records are useful because upstream schemas evolve. A raw record is not automatically safe to persist. Normal AgentTrace CLI ingestion redacts the complete serialized event before storage, including raw-source JSON. A trace database should still be treated as sensitive engineering data because arbitrary upstream payloads can contain information that no static redaction rule recognizes.
 
+CLI and HTTP exports run the current redaction rules again. Raw source is omitted by default on sharing-oriented export/read paths and must be explicitly requested where supported.
+
 ## Process supervision
 
 Process wrapping records process start, stdout/stderr chunks, exit, cancellation, and duration from AgentTrace's own supervisor. It does **not** imply visibility into model requests, tool calls, or file reads. Structured child output can add those signals only when the harness explicitly exposes them.
@@ -62,6 +69,12 @@ SQLite is the system of record. The current store uses WAL mode, `synchronous=NO
 
 On startup, interrupted runs can be classified as `interrupted` instead of silently appearing successful.
 
+## Adapter contracts
+
+Each built-in adapter is required to declare capability evidence rather than imply parity with another harness. Structured adapters keep sanitized representative fixtures, and cross-adapter tests assert both positive normalization and important negative capabilities. Unknown upstream records should be preserved as raw checkpoints where safe instead of guessed into a richer event kind.
+
+`docs/adapter-authoring.md` defines the contributor contract for command-shape validation, provenance, raw-event preservation, fixtures, and security boundaries.
+
 ## Replay safety
 
 Replay only considers recorded `shell.command` events with structured command metadata. A normal replay invocation is a dry run. Actual execution requires `--execute` plus an exact command or sequence allowlist.
@@ -72,7 +85,7 @@ Model calls, tool calls, MCP operations, approvals, file events, and other trace
 
 ## Local API boundary
 
-`agenttrace-server` exposes health, harness/capability metadata, run summaries, event retrieval, JSONL export, and deterministic run statistics. It binds to `127.0.0.1:4319` by default and refuses non-loopback binding unless the caller explicitly enables it.
+`agenttrace serve` and the standalone `agenttrace-server` binary expose the same server library: health, harness/capability metadata, run summaries, event retrieval, JSONL export, and deterministic run statistics. The server binds to `127.0.0.1:4319` by default and refuses non-loopback binding unless the caller explicitly enables it.
 
 The HTTP API is currently read-oriented; recording remains an adapter/CLI responsibility.
 
@@ -81,3 +94,7 @@ The HTTP API is currently read-oriented; recording remains an adapter/CLI respon
 The desktop application uses Tauri commands backed directly by `TraceStore` for local run/event access. React/TypeScript owns presentation. The UI provides a run browser, dense event timeline, search and category filters, provenance indicators, payload/raw/execution inspectors, and observed metrics without decorative telemetry or fake precision.
 
 A separate local HTTP API exists for other clients, but the desktop app does not require a localhost server process to function.
+
+## Performance validation
+
+`agenttrace-benchmarks` expands a deterministic large-trace recipe into 100,000 events and measures the paths most likely to become bottlenecks: incremental SQLite ingestion, full-run loading, JSONL export, Rust-heap peak deltas during load/export, and adapter normalization throughput. Measurements are emitted for the current machine; they are not converted into hard-coded product claims.
