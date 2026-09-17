@@ -11,9 +11,9 @@ AgentTrace observes developer tools, so a trace can contain credentials, private
 - Known secret patterns and sensitive JSON keys are replaced with `[REDACTED]` by the built-in redactor.
 - Strings that resolve to configured sensitive path components such as `.ssh`, `.aws`, `.gnupg`, `.kube`, and `.env` are redacted by the CLI persistence path. This is not a general filesystem access-control mechanism.
 - CLI process supervision invokes executables through structured program/argument fields. Harness-specific adapters may legitimately request a shell when that is the upstream interface they are tracing.
-- Exports currently serialize the already-redacted records stored in SQLite. There is not a second independent export-time redaction pass yet, so the database itself must be treated as sensitive data.
+- CLI and HTTP exports re-apply the current built-in redaction policy before serialization. Raw-source payloads are excluded by default and require an explicit `--raw` or `?raw=true` request.
 
-Static redaction cannot guarantee removal of every secret format. A harness can emit arbitrary source code, prompts, file contents, tokens in unknown formats, or proprietary data. Treat trace databases, JSONL exports, screenshots, and raw-source views as sensitive engineering artifacts.
+Static redaction cannot guarantee removal of every secret format. A harness can emit arbitrary source code, prompts, file contents, tokens in unknown formats, or proprietary data. Treat trace databases, JSONL exports, screenshots, and raw-source views as sensitive engineering artifacts even after redaction.
 
 ## Provenance is a security feature
 
@@ -23,7 +23,7 @@ AgentTrace does not infer secret-bearing context merely to make a trace appear c
 
 Native structured streams can contain more than the visible harness UI. A raw event may include tool inputs, model messages, file contents, headers, extension state, or command output. Raw-source records stored through the CLI are redacted before persistence, but they can still contain sensitive information not matched by built-in rules.
 
-The CLI hides raw-source data in `inspect` output unless `--raw` is supplied. The desktop inspector has an explicit raw-source visibility control.
+The CLI hides raw-source data in `inspect` and `export` output unless `--raw` is supplied. The HTTP API hides raw-source data unless `?raw=true` is supplied. Both export surfaces re-run current redaction rules before returning data. The desktop inspector has an explicit raw-source visibility control for the local database.
 
 ## Replay
 
@@ -35,7 +35,7 @@ Imported traces never grant replay permission automatically.
 
 ## Local API
 
-`agenttrace-server` binds to loopback by default. A non-loopback bind is rejected unless `--allow-remote` is explicitly supplied. AgentTrace does not currently provide authentication or TLS for the local API; remote exposure therefore requires an external trusted boundary and should not be enabled casually.
+`agenttrace serve` and the standalone `agenttrace-server` binary bind to loopback by default. A non-loopback bind is rejected unless `--allow-remote` is explicitly supplied. AgentTrace does not currently provide authentication or TLS for the local API; remote exposure therefore requires an external trusted boundary and should not be enabled casually.
 
 ## Encryption
 
