@@ -469,9 +469,17 @@ fn classify_risks(program: &str, args: &[String], display: &str) -> Vec<ReplayRi
     let mut risks = BTreeSet::from([ReplayRisk::ShellExecution]);
     let normalized = display.to_ascii_lowercase();
     let executable = if program == "shell" {
-        normalized.split_whitespace().next().unwrap_or("")
+        normalized
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_owned()
     } else {
-        program.rsplit(['/', '\\']).next().unwrap_or(program).to_ascii_lowercase().leak()
+        program
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(program)
+            .to_ascii_lowercase()
     };
 
     if has_filesystem_mutation(&normalized) {
@@ -480,10 +488,10 @@ fn classify_risks(program: &str, args: &[String], display: &str) -> Vec<ReplayRi
     if has_git_mutation(&normalized) {
         risks.insert(ReplayRisk::GitMutation);
     }
-    if has_network_access(executable, &normalized) {
+    if has_network_access(&executable, &normalized) {
         risks.insert(ReplayRisk::NetworkAccess);
     }
-    if has_external_service(executable, &normalized) {
+    if has_external_service(&executable, &normalized) {
         risks.insert(ReplayRisk::ExternalService);
     }
     if has_credential_signal(&normalized, args) {
@@ -701,10 +709,7 @@ mod tests {
         let plan = build_plan(&[shell, other]);
         assert_eq!(plan.commands.len(), 1);
         assert_eq!(plan.commands[0].display, "cargo test");
-        assert_eq!(
-            plan.commands[0].risks,
-            vec![ReplayRisk::ShellExecution]
-        );
+        assert_eq!(plan.commands[0].risks, vec![ReplayRisk::ShellExecution]);
         assert_eq!(plan.non_shell_events, 1);
         assert!(!plan.safety.os_sandboxed);
     }
