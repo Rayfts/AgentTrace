@@ -38,11 +38,12 @@ The desktop Tauri crate is intentionally a nested independent Cargo workspace so
 2. **Capability negotiation** enumerates the adapter capability model and returns `native`, `inferred`, `derived`, or explicit `unavailable` evidence for every category. Missing map entries are materialized as unavailable at the registry boundary.
 3. **Collection** uses the strongest implemented structured stream, import surface, or conservative process wrapper for the selected harness. Researched upstream hooks/RPC/SDK/watch surfaces are not advertised as implemented until a collector/control path exists.
 4. **Normalization** creates schema-v2 `EventEnvelope` records and never upgrades provenance. A deterministic calculation from native data is `derived`, not `native`. The protocol can represent explicit browser navigation/action/network/console evidence, but adapters must not promote generic tool records into `browser.*` events without verified semantics.
-5. **Redaction** applies built-in rules before normal CLI persistence. An optional additive JSON profile can extend regex patterns, sensitive JSON keys, and sensitive path fragments, but cannot disable built-in safe defaults.
-6. **Storage** appends events incrementally to SQLite in sequence order, compresses sufficiently large payloads, maintains run summaries, stores run-scoped artifacts with optional event linkage and SHA-256 identity, and marks interrupted runs during recovery.
-7. **Query surfaces** read from the same `TraceStore`: CLI, loopback HTTP API, and Tauri commands. Sharing/read surfaces re-apply the active redaction policy before returning event data and omit raw-source payloads by default where applicable.
-8. **Desktop import** uses the product adapter registry rather than a separate frontend parser. A user-selected file path is passed from the native Tauri dialog to Rust, normalized by the selected adapter, redacted, and appended to `TraceStore`.
-9. **UI** renders stored evidence and does not synthesize unavailable telemetry client-side. Charts use observed tokens/event counts/durations only; diff, terminal, span, browser, subagent, and context views appear only when corresponding evidence is present.
+5. **Product-field materialization** may promote an upstream field into a typed protocol field only when semantics are sufficiently explicit. The first latency example is Claude Code's native `duration_api_ms`, which the registry converts to `latency_ns` while preserving the original upstream attribute. Other durations are not relabeled as latency.
+6. **Redaction** applies built-in rules before normal CLI persistence. An optional additive JSON profile can extend regex patterns, sensitive JSON keys, and sensitive path fragments, but cannot disable built-in safe defaults.
+7. **Storage** appends events incrementally to SQLite in sequence order, compresses sufficiently large payloads, maintains run summaries, stores run-scoped artifacts with optional event linkage and SHA-256 identity, and marks interrupted runs during recovery.
+8. **Query surfaces** read from the same `TraceStore`: CLI, loopback HTTP API, and Tauri commands. Sharing/read surfaces re-apply the active redaction policy before returning event data and omit raw-source payloads by default where applicable.
+9. **Desktop import** uses the product adapter registry rather than a separate frontend parser. A user-selected file path is passed from the native Tauri dialog to Rust, normalized by the selected adapter, redacted, and appended to `TraceStore`.
+10. **UI** renders stored evidence and does not synthesize unavailable telemetry client-side. Charts use observed tokens, typed latency, event counts, and durations only; diff, terminal, span, browser, subagent, and context views appear only when corresponding evidence is present.
 
 Library consumers that call lower-level crates directly are responsible for applying the same redaction policy before persistence if they bypass the CLI path.
 
@@ -56,11 +57,13 @@ Sequence is authoritative for local ingestion order. Wall-clock time is useful f
 
 Schema v2 reserves normalized browser event kinds in addition to run/process/model/reasoning/tool/shell/file/Git/MCP/approval/subagent/context/retry/error events. Reserving a canonical event kind makes the evidence representable; it does not imply that every harness or current adapter exposes that signal.
 
+Schema v2 also separates `duration_ns` from `latency_ns`. A duration is not automatically a latency measurement. Typed latency is present only when an implemented source provides explicit latency-like evidence.
+
 Large browser-side evidence such as screenshots, DOM snapshots, or HAR files belongs in artifact storage with an event reference rather than being duplicated through event payloads.
 
 ## Capability boundary
 
-Individual adapter crates describe what their normalizers know how to interpret, while `agenttrace-registry` is the product-facing truth boundary. The registry delegates execution/import unchanged but filters researched-yet-unimplemented integration modes and completes every adapter capability report with explicit unavailable evidence.
+Individual adapter crates describe what their normalizers know how to interpret, while `agenttrace-registry` is the product-facing truth boundary. The registry delegates execution/import while filtering researched-yet-unimplemented integration modes, completing every adapter capability report with explicit unavailable evidence, and applying narrowly scoped typed-field materialization where justified by upstream semantics.
 
 That separation prevents a documented upstream feature from accidentally becoming a product claim. For example, a harness may have an SDK, hook, RPC, or filesystem-watch surface upstream while the current AgentTrace implementation supports only a structured stream or import path.
 
@@ -96,7 +99,7 @@ Each built-in adapter is required to declare capability evidence rather than imp
 
 Replay only considers recorded `shell.command` events with structured command metadata. A normal replay invocation is a dry run. The plan classifies recognizable side-effect risks such as filesystem mutation, Git mutation, network access, external-service calls, and credential-sensitive arguments. These tags are advisory visibility, not execution authority.
 
-Actual execution requires `--execute` plus an exact command or sequence allowlist. The exact entry confirms that specific command; there is no broad side-effect-category allow switch.
+Actual execution requires `--execute` plus an exact command or sequence allowlist. The exact entry confirms only that specific recorded command; AgentTrace deliberately avoids a broad side-effect-category allow switch that would authorize a wider class of operations.
 
 Allowed commands execute in a temporary detached Git worktree at a caller-selected revision, with a scrubbed environment and per-command timeout. This isolates normal repository changes from the caller's active worktree. It is **not an operating-system sandbox**: an allowlisted command still has the current user's OS permissions and may deliberately access resources outside the worktree.
 
@@ -112,10 +115,12 @@ Both server entry points can use the same additive redaction profile as the CLI.
 
 The desktop application uses Tauri commands backed directly by `TraceStore` plus the product-facing adapter registry. React/TypeScript owns presentation. The official Tauri dialog plugin is scoped to the main window for user-initiated import file selection.
 
-The current UI provides run history, native adapter-backed import, live active-run polling, dense timeline search/filtering including browser event kinds, complete capability evidence, observed-only token/event/duration charts, payload/raw/execution/terminal inspectors, evidence-backed unified and split patch views, span/subagent/context relationships, artifact metadata, deterministic run comparison, sanitized JSONL export, and persistent System/Dark/Light themes. It does not create decorative telemetry or infer hidden relationships when identifiers/evidence are absent.
+The current UI provides run history, native adapter-backed import, live active-run polling, dense timeline search/filtering including browser event kinds, complete capability evidence, observed-only token/API-latency/event/duration charts, payload/raw/execution/terminal inspectors, evidence-backed unified and split patch views, span/subagent/context relationships, artifact metadata, deterministic run comparison, sanitized JSONL export, and persistent System/Dark/Light themes. It does not create decorative telemetry or infer hidden relationships when identifiers/evidence are absent.
 
 A separate local HTTP API exists for other clients, but the desktop app does not require a localhost server process to function.
 
-## Performance validation
+## Performance and validation
 
 `agenttrace-benchmarks` expands a deterministic schema-v2 large-trace recipe into 100,000 events and measures the paths most likely to become bottlenecks: incremental SQLite ingestion, full-run loading, JSONL export, Rust-heap peak deltas during load/export, and adapter normalization throughput. Measurements are emitted for the current machine; they are not converted into hard-coded product claims.
+
+The repository's configured CI covers formatting, clippy, workspace tests, cross-platform checks, desktop web compilation, Windows Tauri compilation, and dependency audit. `docs/testing.md` provides the corresponding end-to-end local validation sequence, including fixtures, replay gates, loopback/remote-bind API behavior, desktop import/themes/latency, packaging, and benchmarks.
