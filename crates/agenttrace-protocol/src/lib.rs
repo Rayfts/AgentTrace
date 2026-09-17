@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u16 = 1;
+pub const SCHEMA_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -118,6 +118,14 @@ pub enum EventKind {
     FilePatch,
     #[serde(rename = "git.operation")]
     GitOperation,
+    #[serde(rename = "browser.navigation")]
+    BrowserNavigation,
+    #[serde(rename = "browser.action")]
+    BrowserAction,
+    #[serde(rename = "browser.network")]
+    BrowserNetwork,
+    #[serde(rename = "browser.console")]
+    BrowserConsole,
     #[serde(rename = "mcp.request")]
     McpRequest,
     #[serde(rename = "mcp.response")]
@@ -310,6 +318,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&EventKind::ContextCompacted).unwrap(),
             "\"context.compacted\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EventKind::BrowserNavigation).unwrap(),
+            "\"browser.navigation\""
         );
     }
 
