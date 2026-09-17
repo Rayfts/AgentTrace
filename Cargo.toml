@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "crates/agenttrace-protocol",
   "crates/agenttrace-adapter-api",
+  "crates/agenttrace-adapter-contracts",
   "crates/agenttrace-storage",
   "crates/agenttrace-redaction",
   "crates/agenttrace-process",
