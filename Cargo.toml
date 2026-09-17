@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/agenttrace-protocol",
+  "crates/agenttrace-adapter-api",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/Rayfts/AgentTrace"
+homepage = "https://github.com/Rayfts/AgentTrace"
+authors = ["AgentTrace contributors"]
+
+[workspace.dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
