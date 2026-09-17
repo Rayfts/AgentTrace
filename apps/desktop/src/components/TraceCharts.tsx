@@ -54,16 +54,25 @@ function eventData(stats?: RunStats): BarDatum[] {
 }
 
 function durationData(events: EventEnvelope[]): BarDatum[] {
+  return timingData(events, "duration_ns");
+}
+
+function latencyData(events: EventEnvelope[]): BarDatum[] {
+  return timingData(events, "latency_ns");
+}
+
+function timingData(events: EventEnvelope[], field: "duration_ns" | "latency_ns"): BarDatum[] {
   return events
-    .filter((event) => (event.duration_ns ?? 0) > 0)
-    .sort((left, right) => (right.duration_ns ?? 0) - (left.duration_ns ?? 0))
+    .filter((event) => (event[field] ?? 0) > 0)
+    .sort((left, right) => (right[field] ?? 0) - (left[field] ?? 0))
     .slice(0, 8)
     .map((event) => {
-      const milliseconds = (event.duration_ns ?? 0) / 1_000_000;
+      const nanoseconds = event[field] ?? 0;
+      const milliseconds = nanoseconds / 1_000_000;
       const display = milliseconds < 1000 ? `${milliseconds.toFixed(1)} ms` : `${(milliseconds / 1000).toFixed(2)} s`;
       return {
         label: `#${event.sequence} ${event.kind}`,
-        value: event.duration_ns ?? 0,
+        value: nanoseconds,
         display,
       };
     });
@@ -73,6 +82,7 @@ export function TraceCharts({ stats, events }: Props) {
   return (
     <section className="chart-grid" aria-label="Observed trace charts">
       <BarChart title="Token usage" data={tokenData(stats)} empty="no token usage was exposed" />
+      <BarChart title="API latency" data={latencyData(events)} empty="no explicit latency was exposed" />
       <BarChart title="Event distribution" data={eventData(stats)} empty="no normalized events" />
       <BarChart title="Longest observed durations" data={durationData(events)} empty="no event durations were exposed" />
     </section>
