@@ -1,102 +1,110 @@
 # Harness research and capability matrix
 
-Research snapshot: 2026-09-17. The matrix documents the strongest **verified public integration surface** found in the upstream repositories. Runtime detection must still inspect the installed version because harness behavior changes.
+Research snapshot: 2026-09-17. Upstream source research determines which integration modes AgentTrace is willing to implement; the matrix below reports what the **current adapters normalize today**. `agenttrace capabilities <harness>` is the runtime source of truth.
 
-Legend: **N** native, **I** inferred, **D** derived, **—** unavailable/not promised by the selected integration.
+Legend: **N** native, **I** inferred, **D** derived, **—** unavailable/not currently normalized by the selected adapter.
 
-| Harness | Primary integration | Tools | Shell | Files/patches | MCP | Subagents | Usage | Cost | Raw structured events |
+| Harness | Implemented integration | Tools | Shell | Files/patches | MCP | Subagents | Usage | Cost | Raw structured events |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| OpenAI Codex | `codex exec --json` JSONL | N | N | N | N | N | N | — | N |
-| Claude Code | documented hooks + transcript; stream-json when installed CLI advertises it | N | N via tool hooks | N via tool hooks | tool-dependent | N stop hook | runtime-dependent | — | N via hooks/stream |
-| OpenCode | `opencode run --format json` / event subscription | N | N | N | N | N | N when emitted | N when emitted | N |
-| Pi | `pi --mode json`, RPC, JSONL sessions | N | N | N | extension/tool dependent | extension dependent | N | N when provider reports | N |
-| Gemini CLI | `--output-format stream-json` | N | tool-dependent | tool-dependent | N/tool-dependent | — | N | — | N |
-| Aider | process + chat/LLM history + Git/worktree observation | I/N history | I process output | D/I via Git + history | — | — | history/provider dependent | history/provider dependent | — |
-| Goose | `goose run --output-format stream-json` | N | N | N | N (extensions) | harness-dependent | N when emitted | provider-dependent | N |
-| Cline | `cline --json` NDJSON | N | N | N | N | N/team events | N | N when exposed | N |
-| Roo Code | persisted task/API message import and file watching | N history | I from persisted messages | N/I from task history | message-dependent | task-dependent | message-dependent | message-dependent | N persisted JSON |
-| Continue | `cn -p` headless; JSON output only when installed version exposes `--format json` | N when JSON emits tool records | N when JSON emits tool records | N/I | N | agent-dependent | version/provider dependent | — | version-dependent |
+| OpenAI Codex | `codex exec --json` JSONL + JSONL import | N | N | N | N | — | N | — | N |
+| Claude Code | `claude --output-format stream-json --verbose` + import; hook mode declared separately | N | N | N | N | N | N | N when reported | N |
+| OpenCode | `opencode run --format json` + JSONL import | N | N | N | N | N | N | N when emitted | N |
+| Pi | `pi --mode json` + JSONL import; RPC declared separately | N | N | N | — | — | N | N when reported | N |
+| Gemini CLI | `--output-format stream-json` + JSONL import | N | N | N | — | — | N | — | N |
+| Aider | process wrapping + `--analytics-log` JSONL import | — | — | — | — | — | N from analytics | — | N for analytics records |
+| Goose | `goose run --output-format stream-json` | N | — | — | N | — | N when emitted | N when reported | N |
+| Cline | `cline --json` NDJSON | N | N | N | — | N | N | N when exposed | N |
+| Roo Code | persisted task/API-message JSON import | N | — | — | — | — | — | — | N |
+| Continue | `cn -p --format json` process capture | — | — | — | — | — | — | — | N for final/status JSON |
+
+A blank capability is intentional. AgentTrace does not promote a generic tool record into `shell.command`, `file.write`, `mcp.request`, or another more specific event unless the adapter has enough upstream evidence to classify it safely.
 
 ## OpenAI Codex
 
 Official repository: <https://github.com/openai/codex>
 
-The Rust `codex exec` implementation has a documented `--json` option that prints JSONL. Its `ThreadEvent` includes thread/turn lifecycle, item lifecycle, and errors. Item variants include agent messages, reasoning summaries, command execution with aggregated output and exit code, file changes, MCP tool calls, collaboration/subagent calls, web search, todo lists, and errors. Turn completion includes input, cached input, cache-write input, output, and reasoning-output token usage.
+The Rust `codex exec` implementation exposes a JSONL event stream. Upstream event types include thread/turn lifecycle, item lifecycle, command execution, file changes, MCP calls, reasoning/assistant records, errors, and turn usage. Upstream Codex also has collaboration/subagent event concepts, but the current AgentTrace normalizer does not yet claim `subagent.*` support; unrecognized records are preserved as raw checkpoints instead.
 
-Adapter strategy: direct process wrapping of `codex exec --json`, preserving each JSONL record. Runtime detection checks `codex --version` and `codex exec --help`; AgentTrace will not append flags to arbitrary `codex` invocations unless the detected command shape supports them.
+Adapter strategy: direct process wrapping of an explicit `codex exec ...` invocation. The adapter injects `--json` only into that documented command shape; it refuses to silently convert the interactive TUI into headless execution. Existing JSONL can also be imported.
 
 ## Claude Code
 
 Official repository: <https://github.com/anthropics/claude-code>
 
-The public repository documents hooks for `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreCompact`, and notifications. Hook stdin contains a session ID, transcript path, cwd, permission mode, event name, and event-specific tool/prompt/result fields. The upstream changelog also documents `--output-format stream-json` behavior.
+Claude Code documents hooks such as `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`, `UserPromptSubmit`, and compaction-related events, and current CLI versions expose structured stream output for non-interactive execution.
 
-Adapter strategy: prefer documented hook capture for interactive sessions because it observes approvals/tool lifecycle without scraping the terminal. For non-interactive use, enable stream JSON only after runtime help/version detection confirms the installed CLI supports it. Transcript import supplements history but does not retroactively make missing timing data native.
+Adapter strategy: the current reference implementation normalizes `--output-format stream-json --verbose` for launched/imported runs and preserves raw records. It maps exposed tool lifecycle, Bash/file operations, subagents, model usage, latency, and reported cost. A hook integration mode is declared for the stronger interactive path, but the current stream adapter does not claim a complete approval lifecycle without that hook collector.
 
 ## OpenCode
 
 Official repository: <https://github.com/anomalyco/opencode>
 
-`opencode run` is explicitly non-interactive and accepts `--format json` for raw event streaming. The implementation subscribes to the event stream and handles message parts, tool completion/error, reasoning, session errors/status, permissions, and child sessions. The SDK also exposes SSE event subscriptions.
+`opencode run` provides a JSON format and the upstream event system includes message parts, tools, reasoning, session state/errors, permissions, and child sessions.
 
-Adapter strategy: wrap `opencode run --format json` or attach to an explicitly configured OpenCode server event stream. Preserve session IDs and parent session relationships.
+Adapter strategy: launch `opencode run --format json` or import its JSONL output. Current normalization covers tools, shell/file activity, MCP identity when explicit, subagents, usage, reported cost, and raw events. The non-interactive compact stream is not treated as a complete approval audit trail.
 
 ## Pi
 
 Official repository: <https://github.com/earendil-works/pi>
 
-Pi documents four modes: interactive, print/JSON, RPC, and SDK. `pi --mode json` emits JSON lines with session header plus agent/turn/message/tool lifecycle. Sessions are stored as JSONL under `~/.pi/agent/sessions/`; the JSON mode includes provider-reported usage and compaction/queue events.
+Pi documents interactive, JSON, RPC, and SDK modes. `pi --mode json` emits JSON lines covering session/turn/message/tool lifecycle, provider usage, and context-compaction related records; sessions are JSONL.
 
-Adapter strategy: JSON mode for launched runs; RPC for deeper embedded control when requested; session JSONL import for existing runs. AgentTrace treats provider usage as native to Pi's event stream and never assumes nonzero usage before the provider reports it.
+Adapter strategy: launched runs use JSON mode and existing JSONL sessions can be imported. RPC is represented as a supported integration mode but is not used to invent fields missing from the JSON stream. The current normalizer covers model/tool, shell/file, context, usage, cost when reported, and raw events; MCP/subagent-specific normalization is not claimed yet.
 
 ## Gemini CLI
 
 Official repository: <https://github.com/google-gemini/gemini-cli>
 
-The core defines `stream-json` JSONL events: `init`, `message`, `tool_use`, `tool_result`, `error`, and `result`. Result stats include total/input/output/cached/input token counts, duration, tool-call count, and per-model breakdowns. Gemini CLI also exposes configurable telemetry/OTLP settings, but AgentTrace must not silently redirect a user's existing telemetry endpoint.
+Gemini CLI defines `stream-json` records including initialization, messages, tool use/results, errors, result statistics, and per-model token accounting. It also has configurable telemetry/OTLP facilities.
 
-Adapter strategy: structured stream JSON for launched runs. Optional OTLP ingestion is an explicit advanced integration, never a default side effect.
+Adapter strategy: AgentTrace launches or imports `stream-json`. Current normalization covers model/tool events, recognized shell/file tool activity, failures, duration, usage, and raw records. AgentTrace does not silently redirect Gemini's telemetry endpoint and does not claim cost or MCP-specific normalization from this adapter.
 
 ## Aider
 
 Official repository: <https://github.com/Aider-AI/aider>
 
-Aider documents `--message`/`--message-file` for one-shot non-chat execution, `--chat-history-file`, and `--llm-history-file`. It also has strong Git integration. The researched public CLI does not promise a universal native JSON event stream equivalent to Codex/Pi/Gemini.
+Aider provides one-shot message modes, local history files, Git integration, and local analytics logging. The analytics log deliberately avoids prompts/code while retaining aggregate execution/model metadata.
 
-Adapter strategy: process supervision plus explicitly configured history files and before/after Git state. stdout/stderr timing is native to AgentTrace's process wrapper; changes derived from Git snapshots are marked derived/inferred. Model/tool fields that are not present in the history remain unavailable.
+Adapter strategy: the implemented adapter has two honest surfaces: native process supervision for stdout/stderr/failure/duration and import of explicitly supplied Aider analytics JSONL for model identity/aggregate token metadata. It does **not** currently claim Git-diff reconstruction, file events, shell-command classification, tool calls, cost, MCP, or subagents. Those remain future work until implemented with contract tests.
 
 ## Goose
 
 Official repository: <https://github.com/aaif-goose/goose> (the former `block/goose` location redirects here).
 
-Goose documents `goose run` with `--output-format text|json|stream-json`, session management, stdio/HTTP extensions, and debug output. Current session storage uses SQLite (`sessions.db`) from v1.10 onward, with legacy JSONL import/export support.
+Goose documents `goose run --output-format stream-json`, session management, extensions, and MCP-oriented tooling. Current stream records expose messages, tool requests/results, confirmation/action-required records, usage, errors, and completion/cost metadata when present.
 
-Adapter strategy: `stream-json` for launched runs, preserving extension/MCP events; explicit session export/import for existing runs rather than reading the live Goose database behind its back unless a compatible read-only schema is documented.
+Adapter strategy: launched runs require `goose run ... --output-format stream-json`. The adapter normalizes generic tool lifecycle, MCP activity, approvals, usage, reported cost, failures, and raw records. It deliberately does not relabel arbitrary Goose tools as shell/file events without a verified tool identity mapping.
 
 ## Cline
 
 Official repository: <https://github.com/cline/cline>
 
-The current CLI is first-class: `cline --json` emits NDJSON. Its canonical `AgentEvent` includes iteration lifecycle, text/reasoning/tool content start/update/end, usage (including optional cache and cost fields), notices/recovery, final result, and errors. Team events expose subagent/team activity. CLI JSON mode writes the canonical agent event inside an `agent_event` envelope.
+The current CLI supports NDJSON through `cline --json`. Its canonical agent-event shape includes iteration lifecycle, content/tool lifecycle, usage/cost, notices/recovery, completion/errors, and team/subagent activity.
 
-Adapter strategy: direct `cline --json` wrapping. Runtime configuration can keep normal approvals; AgentTrace must never force `--yolo` just to make automation easier.
+Adapter strategy: direct `cline --json` wrapping. Current normalization covers recognized shell/file tools, retries, subagents, usage/cost, final output, and raw records. AgentTrace never forces Cline's permissive approval mode merely to make automation easier, and this adapter does not currently claim a dedicated MCP event classification.
 
 ## Roo Code
 
 Official repository: <https://github.com/RooCodeInc/Roo-Code>
 
-The upstream repository is archived and its README states the Roo Code Extension was shut down on May 15, 2026. The codebase nevertheless documents persisted per-task `api_conversation_history.json` and `ui_messages.json`, plus task history storage.
+The upstream repository is archived and its README states the Roo Code Extension was shut down on May 15, 2026. Its persisted task storage includes API conversation history and UI-message JSON.
 
-Adapter strategy: import/watch historical task storage only. AgentTrace will not pretend a maintained headless Roo CLI exists. Persisted records can expose messages, reasoning fields, tool records, and metadata where present; missing timing/approval data remains unavailable.
+Adapter strategy: import persisted task history; direct execution is intentionally unsupported. Current normalization preserves model/reasoning/tool records and context-related history where present. Shell, file, MCP, subagent, usage, cost, approval, latency, and duration fields are not promoted unless the persisted format supplies enough data and a future normalizer explicitly implements them.
 
 ## Continue
 
 Official repository: <https://github.com/continuedev/continue>
 
-Continue has a headless `cn -p` mode and current repository history documents JSON output support through `--format json` in versions that expose the flag. The project has changed its CLI surface over time, including recent removal of old Hub/login behavior, so hard-coded historical flags are risky.
+Continue has a headless `cn -p` workflow and current versions can emit JSON final/status output. The CLI surface has changed over time, so AgentTrace avoids treating historical flags as universally available.
 
-Adapter strategy: detect `cn --version` and parse `cn --help`/headless help before selecting JSON mode. If structured output is absent, AgentTrace falls back to process events and explicitly marks internal agent/tool telemetry unavailable rather than parsing decorative terminal text.
+Adapter strategy: the current adapter accepts only an explicit headless `cn -p ...` command and requires/sets `--format json`. It treats that output as final/status data plus explicit compaction status—not as a full internal event stream. Tool calls, shell/file activity, usage, cost, approvals, MCP, and subagents remain unavailable rather than being reconstructed from decorative terminal text.
+
+## Detection and version drift
+
+The shared detector currently checks whether the expected binary is on `PATH` and records its `--version` output. Each adapter's start path then validates the documented command shape it knows how to normalize (for example, `codex exec`, `goose run`, or `cn -p`) and rejects incompatible explicit output modes. AgentTrace does not currently claim exhaustive `--help` capability negotiation for every installed version.
+
+Because upstream CLIs evolve, capability reports and contract fixtures must be updated whenever an adapter changes its accepted wire format. Unsupported records should be retained as raw checkpoints rather than guessed into a richer event kind.
 
 ## Fixture policy
 
-Each adapter owns sanitized fixtures copied from or modeled on the documented public wire shape. Fixtures contain no real credentials, home paths, repository secrets, or user prompts. Contract tests assert both normalization and **negative capabilities**: absence is a feature when the upstream surface does not expose a field.
+Adapters with structured import paths use sanitized fixture records modeled on verified public wire shapes. Fixtures contain no real credentials, private home paths, repository secrets, or user prompts. Contract tests should cover both positive normalization and negative capabilities: absence is a feature when upstream or the implemented adapter does not expose a field.
