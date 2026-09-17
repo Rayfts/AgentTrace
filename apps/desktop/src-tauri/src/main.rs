@@ -382,6 +382,7 @@ fn capability_name(capability: Capability) -> &'static str {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let database_path = match std::env::var_os("AGENTTRACE_DB") {
                 Some(path) => PathBuf::from(path),
