@@ -42,7 +42,7 @@ agenttrace capabilities codex
 agenttrace doctor
 ```
 
-`harnesses` checks whether each built-in adapter can find its expected executable. `capabilities` reports all 21 telemetry categories with an evidence level instead of implying every harness exposes the same data. The product registry also removes researched integration modes that do not yet have a real AgentTrace implementation.
+`harnesses` checks whether each built-in adapter can find its expected executable. `capabilities` reports all 21 adapter telemetry categories with an evidence level instead of implying every harness exposes the same data. The product registry also removes researched integration modes that do not yet have a real AgentTrace implementation.
 
 ## Record a run
 
@@ -99,7 +99,9 @@ Replay is dry-run-first:
 agenttrace replay <run-id> --repo /path/to/repository
 ```
 
-The dry run lists only recorded `shell.command` events that are eligible for replay. To execute, explicitly allow exact commands or event sequence numbers:
+The dry-run JSON lists only recorded `shell.command` events eligible for replay and adds advisory risk tags where recognizable. Tags include `shell_execution`, `filesystem_mutation`, `git_mutation`, `network_access`, `external_service`, and `credential_sensitive`.
+
+Risk tags do not execute or authorize anything. To execute, explicitly allow exact commands or event sequence numbers:
 
 ```bash
 agenttrace replay <run-id> \
@@ -108,6 +110,8 @@ agenttrace replay <run-id> \
   --allow "cargo test" \
   --allow-sequence 42
 ```
+
+An exact allowlist entry confirms that recorded command together with the risk tags displayed in the dry-run plan. Unlisted commands stay blocked; there is no broad flag that authorizes an entire side-effect category.
 
 Additional controls:
 
