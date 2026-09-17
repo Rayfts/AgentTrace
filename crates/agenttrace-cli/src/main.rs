@@ -3,12 +3,14 @@ use std::{
     error::Error,
     ffi::OsString,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use agenttrace_adapter_api::{Capability, HarnessAdapter, ImportRequest, RunRequest};
 use agenttrace_protocol::{EventEnvelope, EventKind, Provenance, ProvenanceLevel};
 use agenttrace_redaction::{REDACTED, Redactor};
 use agenttrace_registry::AdapterRegistry;
+use agenttrace_replay::{ReplayOptions, ReplayPolicy, build_plan, execute_plan};
 use agenttrace_storage::{RunSummary, TraceStore};
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
@@ -71,6 +73,31 @@ enum Command {
     },
     /// Compare two stored runs using deterministic trace statistics.
     Compare { left: Uuid, right: Uuid },
+    /// Plan or execute allowlisted recorded shell commands in a detached Git worktree.
+    Replay {
+        run_id: Uuid,
+        /// Repository whose detached worktree should receive the replay.
+        #[arg(long)]
+        repo: PathBuf,
+        /// Git revision to check out for replay.
+        #[arg(long, default_value = "HEAD")]
+        revision: String,
+        /// Actually execute allowlisted commands. Without this flag replay is a dry run.
+        #[arg(long)]
+        execute: bool,
+        /// Exact recorded command display string to permit. Repeatable.
+        #[arg(long = "allow")]
+        allow: Vec<String>,
+        /// Recorded shell.command sequence number to permit. Repeatable.
+        #[arg(long = "allow-sequence")]
+        allow_sequence: Vec<u64>,
+        /// Per-command execution timeout.
+        #[arg(long, default_value_t = 300)]
+        timeout_seconds: u64,
+        /// Continue executing later allowlisted commands after one fails.
+        #[arg(long)]
+        continue_on_error: bool,
+    },
 }
 
 #[tokio::main]
@@ -95,6 +122,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
             export(cli.db.as_deref(), run_id, output.as_deref()).await?
         }
         Command::Compare { left, right } => compare(cli.db.as_deref(), left, right).await?,
+        Command::Replay {
+            run_id,
+            repo,
+            revision,
+            execute,
+            allow,
+            allow_sequence,
+            timeout_seconds,
+            continue_on_error,
+        } => {
+            replay(
+                cli.db.as_deref(),
+                run_id,
+                repo,
+                revision,
+                execute,
+                allow,
+                allow_sequence,
+                timeout_seconds,
+                continue_on_error,
+            )
+            .await?
+        }
     }
 
     Ok(())
@@ -286,6 +336,63 @@ async fn compare(
         "left": {"run_id": left, "stats": trace_stats(&left_events)},
         "right": {"run_id": right, "stats": trace_stats(&right_events)},
     }))?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn replay(
+    db: Option<&Path>,
+    run_id: Uuid,
+    repo: PathBuf,
+    revision: String,
+    execute: bool,
+    allow: Vec<String>,
+    allow_sequence: Vec<u64>,
+    timeout_seconds: u64,
+    continue_on_error: bool,
+) -> Result<(), Box<dyn Error>> {
+    let store = open_store(db).await?;
+    let events = store.load_run_events(run_id).await?;
+    if events.is_empty() && store.run_summary(run_id).await?.is_none() {
+        return Err(input_error(format!("run {run_id} was not found")).into());
+    }
+
+    let plan = build_plan(&events);
+    if !execute {
+        print_json(&json!({
+            "mode": "dry_run",
+            "run_id": run_id,
+            "plan": plan,
+            "next": "repeat with --execute and one or more exact --allow / --allow-sequence entries"
+        }))?;
+        return Ok(());
+    }
+
+    if allow.is_empty() && allow_sequence.is_empty() {
+        return Err(input_error(
+            "replay execution requires at least one exact --allow or --allow-sequence entry".into(),
+        )
+        .into());
+    }
+    if timeout_seconds == 0 {
+        return Err(input_error("--timeout-seconds must be greater than zero".into()).into());
+    }
+
+    let policy = allow
+        .into_iter()
+        .fold(ReplayPolicy::new(), |policy, command| {
+            policy.allow_command(command)
+        });
+    let policy = allow_sequence
+        .into_iter()
+        .fold(policy, |policy, sequence| policy.allow_sequence(sequence));
+    let mut options = ReplayOptions::new(repo);
+    options.revision = revision;
+    options.timeout_per_command = Duration::from_secs(timeout_seconds);
+    options.continue_on_error = continue_on_error;
+
+    let report = execute_plan(&plan, &policy, &options).await?;
+    print_json(&serde_json::to_value(report)?)?;
     Ok(())
 }
 
