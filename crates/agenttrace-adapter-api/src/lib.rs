@@ -19,6 +19,7 @@ pub enum Capability {
     FileWrites,
     Patches,
     GitOperations,
+    BrowserActivity,
     McpActivity,
     Approvals,
     Subagents,
@@ -34,7 +35,7 @@ pub enum Capability {
 }
 
 impl Capability {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::ModelInteractions,
         Self::ToolCalls,
         Self::ToolResults,
@@ -44,6 +45,7 @@ impl Capability {
         Self::FileWrites,
         Self::Patches,
         Self::GitOperations,
+        Self::BrowserActivity,
         Self::McpActivity,
         Self::Approvals,
         Self::Subagents,
