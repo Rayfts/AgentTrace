@@ -21,3 +21,7 @@ agenttrace-adapter-pi = { path = "../adapters/pi" }
 agenttrace-adapter-roo-code = { path = "../adapters/roo-code" }
 async-trait.workspace = true
 futures.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+uuid.workspace = true
