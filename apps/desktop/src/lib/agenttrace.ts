@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EventEnvelope, RunStats, RunSummary } from "../types";
+import type {
+  ArtifactMetadata,
+  CapabilityReport,
+  EventEnvelope,
+  RunComparison,
+  RunStats,
+  RunSummary,
+} from "../types";
 
 export async function listRuns(limit = 250): Promise<RunSummary[]> {
   return invoke<RunSummary[]>("list_runs", { limit });
@@ -15,6 +22,22 @@ export async function loadEvents(runId: string, raw = true): Promise<EventEnvelo
 
 export async function loadStats(runId: string): Promise<RunStats> {
   return invoke<RunStats>("get_run_stats", { runId });
+}
+
+export async function loadCapabilities(harness: string): Promise<CapabilityReport> {
+  return invoke<CapabilityReport>("get_harness_capabilities", { harness });
+}
+
+export async function compareRuns(left: string, right: string): Promise<RunComparison> {
+  return invoke<RunComparison>("compare_runs", { left, right });
+}
+
+export async function exportSanitizedRun(runId: string, raw = false): Promise<string> {
+  return invoke<string>("export_run_sanitized", { runId, raw });
+}
+
+export async function listArtifacts(runId: string): Promise<ArtifactMetadata[]> {
+  return invoke<ArtifactMetadata[]>("list_run_artifacts", { runId });
 }
 
 export async function databaseLocation(): Promise<string> {
