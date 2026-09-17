@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, net::SocketAddr};
 
 use agenttrace_adapter_api::{Capability, HarnessAdapter};
 use agenttrace_protocol::{EventEnvelope, EventKind, ProvenanceLevel};
+use agenttrace_redaction::{REDACTED, Redactor};
 use agenttrace_registry::AdapterRegistry;
 use agenttrace_storage::{RunSummary, StorageError, TraceStore};
 use axum::{
@@ -177,22 +178,19 @@ async fn get_events(
     Query(query): Query<EventQuery>,
 ) -> ApiResult<Json<Value>> {
     require_run(&state.store, run_id).await?;
-    let mut events = state
+    let events = state
         .store
         .load_run_events(run_id)
         .await
         .map_err(ApiError::storage)?;
-    if !query.raw {
-        for event in &mut events {
-            event.raw_source = None;
-        }
-    }
+    let events = sanitize_events(events, query.raw)?;
     Ok(Json(json!({"run_id": run_id, "events": events})))
 }
 
 async fn export_run(
     State(state): State<AppState>,
     Path(run_id): Path<Uuid>,
+    Query(query): Query<EventQuery>,
 ) -> ApiResult<Response> {
     require_run(&state.store, run_id).await?;
     let events = state
@@ -200,6 +198,7 @@ async fn export_run(
         .load_run_events(run_id)
         .await
         .map_err(ApiError::storage)?;
+    let events = sanitize_events(events, query.raw)?;
     let mut body = String::new();
     for event in events {
         body.push_str(
@@ -236,6 +235,47 @@ async fn run_stats(
         "run_id": run_id,
         "stats": trace_stats(&events),
     })))
+}
+
+fn sanitize_events(
+    events: Vec<EventEnvelope>,
+    include_raw: bool,
+) -> ApiResult<Vec<EventEnvelope>> {
+    let redactor = Redactor::default();
+    events
+        .into_iter()
+        .map(|event| {
+            let mut value = serde_json::to_value(event)
+                .map_err(|error| ApiError::internal(error.to_string()))?;
+            redact_sensitive_paths(&mut value, &redactor);
+            redactor.redact_json(&mut value);
+            let mut event: EventEnvelope = serde_json::from_value(value)
+                .map_err(|error| ApiError::internal(error.to_string()))?;
+            if !include_raw {
+                event.raw_source = None;
+            }
+            Ok(event)
+        })
+        .collect()
+}
+
+fn redact_sensitive_paths(value: &mut Value, redactor: &Redactor) {
+    match value {
+        Value::String(text) if redactor.is_sensitive_path(text) => {
+            *text = REDACTED.to_owned();
+        }
+        Value::Array(values) => {
+            for value in values {
+                redact_sensitive_paths(value, redactor);
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values_mut() {
+                redact_sensitive_paths(value, redactor);
+            }
+        }
+        _ => {}
+    }
 }
 
 async fn require_run(store: &TraceStore, run_id: Uuid) -> ApiResult<RunSummary> {
@@ -420,6 +460,8 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
+    use agenttrace_protocol::{HarnessId, IntegrationMode, Provenance};
+
     use super::*;
 
     #[test]
@@ -434,5 +476,27 @@ mod tests {
             ..remote
         }));
         assert!(bind_allowed(ServerConfig::default()));
+    }
+
+    #[test]
+    fn sanitization_strips_raw_by_default_and_reapplies_rules() {
+        let mut event = EventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            HarnessId::Codex,
+            IntegrationMode::StructuredStream,
+            Provenance::native("test"),
+            EventKind::Checkpoint,
+            json!({"authorization":"Bearer abcdefghijklmnopqrstuvwxyz"}),
+        );
+        event.raw_source = Some(agenttrace_protocol::RawSource {
+            source: "fixture".into(),
+            media_type: "application/json".into(),
+            data: json!({"token":"sk-abcdefghijklmnopqrstuvwxyz123456"}),
+        });
+        let sanitized = sanitize_events(vec![event], false).unwrap();
+        assert_eq!(sanitized[0].payload["authorization"], REDACTED);
+        assert!(sanitized[0].raw_source.is_none());
     }
 }
