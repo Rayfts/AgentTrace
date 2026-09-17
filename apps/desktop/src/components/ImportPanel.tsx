@@ -32,7 +32,6 @@ export function ImportPanel({ onImported, onError }: Props) {
         directory: false,
         filters: [
           { name: "Agent trace/session", extensions: ["json", "jsonl", "ndjson", "log"] },
-          { name: "All files", extensions: ["*"] },
         ],
       });
       if (!selection || Array.isArray(selection)) return;
