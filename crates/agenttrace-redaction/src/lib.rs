@@ -307,7 +307,7 @@ mod tests {
     fn redact_paths(value: &mut Value, redactor: &Redactor) {
         match value {
             Value::String(text) if redactor.is_sensitive_path(text) => {
-                *text = Value::String(REDACTED.into()).as_str().unwrap().to_owned();
+                *text = REDACTED.to_owned();
             }
             Value::Array(values) => {
                 for value in values {
