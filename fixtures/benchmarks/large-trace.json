@@ -1,6 +1,6 @@
 {
-  "name": "large-trace-v1",
-  "schema_version": 1,
+  "name": "large-trace-v2",
+  "schema_version": 2,
   "event_count": 100000,
   "payload_bytes": 256,
   "normalization_iterations": 100000,
