@@ -44,9 +44,18 @@ pub enum ServerError {
 struct AppState {
     store: TraceStore,
     registry: AdapterRegistry,
+    redactor: Redactor,
 }
 
 pub fn router(store: TraceStore, registry: AdapterRegistry) -> Router {
+    router_with_redactor(store, registry, Redactor::default())
+}
+
+pub fn router_with_redactor(
+    store: TraceStore,
+    registry: AdapterRegistry,
+    redactor: Redactor,
+) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/harnesses", get(harnesses))
@@ -56,7 +65,11 @@ pub fn router(store: TraceStore, registry: AdapterRegistry) -> Router {
         .route("/api/runs/{run_id}/events", get(get_events))
         .route("/api/runs/{run_id}/export", get(export_run))
         .route("/api/runs/{run_id}/stats", get(run_stats))
-        .with_state(AppState { store, registry })
+        .with_state(AppState {
+            store,
+            registry,
+            redactor,
+        })
 }
 
 pub async fn serve(
@@ -64,11 +77,20 @@ pub async fn serve(
     store: TraceStore,
     registry: AdapterRegistry,
 ) -> Result<(), ServerError> {
+    serve_with_redactor(config, store, registry, Redactor::default()).await
+}
+
+pub async fn serve_with_redactor(
+    config: ServerConfig,
+    store: TraceStore,
+    registry: AdapterRegistry,
+    redactor: Redactor,
+) -> Result<(), ServerError> {
     if !bind_allowed(config) {
         return Err(ServerError::RemoteBindDenied(config.bind));
     }
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
-    axum::serve(listener, router(store, registry))
+    axum::serve(listener, router_with_redactor(store, registry, redactor))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
@@ -151,8 +173,11 @@ async fn list_runs(
     State(state): State<AppState>,
     Query(query): Query<RunListQuery>,
 ) -> ApiResult<Json<Value>> {
-    let limit = query.limit.clamp(1, 1000);
-    let runs = state.store.list_runs(limit).await.map_err(ApiError::storage)?;
+    let runs = state
+        .store
+        .list_runs(query.limit.clamp(1, 1000))
+        .await
+        .map_err(ApiError::storage)?;
     Ok(Json(Value::Array(
         runs.iter().map(run_summary_json).collect(),
     )))
@@ -183,7 +208,7 @@ async fn get_events(
         .load_run_events(run_id)
         .await
         .map_err(ApiError::storage)?;
-    let events = sanitize_events(events, query.raw)?;
+    let events = sanitize_events(events, query.raw, &state.redactor)?;
     Ok(Json(json!({"run_id": run_id, "events": events})))
 }
 
@@ -198,7 +223,7 @@ async fn export_run(
         .load_run_events(run_id)
         .await
         .map_err(ApiError::storage)?;
-    let events = sanitize_events(events, query.raw)?;
+    let events = sanitize_events(events, query.raw, &state.redactor)?;
     let mut body = String::new();
     for event in events {
         body.push_str(
@@ -240,14 +265,14 @@ async fn run_stats(
 fn sanitize_events(
     events: Vec<EventEnvelope>,
     include_raw: bool,
+    redactor: &Redactor,
 ) -> ApiResult<Vec<EventEnvelope>> {
-    let redactor = Redactor::default();
     events
         .into_iter()
         .map(|event| {
             let mut value = serde_json::to_value(event)
                 .map_err(|error| ApiError::internal(error.to_string()))?;
-            redact_sensitive_paths(&mut value, &redactor);
+            redact_sensitive_paths(&mut value, redactor);
             redactor.redact_json(&mut value);
             let mut event: EventEnvelope = serde_json::from_value(value)
                 .map_err(|error| ApiError::internal(error.to_string()))?;
@@ -495,8 +520,28 @@ mod tests {
             media_type: "application/json".into(),
             data: json!({"token":"sk-abcdefghijklmnopqrstuvwxyz123456"}),
         });
-        let sanitized = sanitize_events(vec![event], false).unwrap();
+        let sanitized = sanitize_events(vec![event], false, &Redactor::default()).unwrap();
         assert_eq!(sanitized[0].payload["authorization"], REDACTED);
         assert!(sanitized[0].raw_source.is_none());
+    }
+
+    #[test]
+    fn custom_redactor_is_used_by_api_sanitization() {
+        let redactor = Redactor::from_profile_json(
+            r#"{"patterns":[{"name":"ticket","regex":"AT-[0-9]{6}"}]}"#,
+        )
+        .unwrap();
+        let event = EventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            HarnessId::Codex,
+            IntegrationMode::StructuredStream,
+            Provenance::native("test"),
+            EventKind::Checkpoint,
+            json!({"ticket":"AT-123456"}),
+        );
+        let sanitized = sanitize_events(vec![event], false, &redactor).unwrap();
+        assert_eq!(sanitized[0].payload["ticket"], REDACTED);
     }
 }
