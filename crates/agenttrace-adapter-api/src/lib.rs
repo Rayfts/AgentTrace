@@ -33,6 +33,32 @@ pub enum Capability {
     FinalOutput,
 }
 
+impl Capability {
+    pub const ALL: [Self; 21] = [
+        Self::ModelInteractions,
+        Self::ToolCalls,
+        Self::ToolResults,
+        Self::ShellCommands,
+        Self::TerminalOutput,
+        Self::FileReads,
+        Self::FileWrites,
+        Self::Patches,
+        Self::GitOperations,
+        Self::McpActivity,
+        Self::Approvals,
+        Self::Subagents,
+        Self::Retries,
+        Self::Failures,
+        Self::ContextChanges,
+        Self::Duration,
+        Self::Latency,
+        Self::TokenUsage,
+        Self::Cost,
+        Self::RawEvents,
+        Self::FinalOutput,
+    ];
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityEvidence {
     pub level: ProvenanceLevel,
@@ -53,6 +79,19 @@ impl CapabilityReport {
             .get(&capability)
             .map(|evidence| evidence.level)
             .unwrap_or(ProvenanceLevel::Unavailable)
+    }
+
+    pub fn evidence(&self, capability: Capability) -> CapabilityEvidence {
+        self.capabilities
+            .get(&capability)
+            .cloned()
+            .unwrap_or_else(|| CapabilityEvidence {
+                level: ProvenanceLevel::Unavailable,
+                source: "adapter capability report".into(),
+                notes: Some(
+                    "the adapter does not currently expose or normalize this capability".into(),
+                ),
+            })
     }
 }
 
@@ -128,7 +167,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn omitted_capability_is_unavailable() {
+    fn omitted_capability_is_explicitly_unavailable() {
         let report = CapabilityReport {
             harness: HarnessId::Aider,
             integration_modes: vec![IntegrationMode::ProcessWrap],
@@ -138,5 +177,14 @@ mod tests {
             report.status(Capability::McpActivity),
             ProvenanceLevel::Unavailable
         );
+        let evidence = report.evidence(Capability::McpActivity);
+        assert_eq!(evidence.level, ProvenanceLevel::Unavailable);
+        assert!(evidence.notes.is_some());
+    }
+
+    #[test]
+    fn all_capability_categories_are_enumerated_once() {
+        let unique: std::collections::BTreeSet<_> = Capability::ALL.into_iter().collect();
+        assert_eq!(unique.len(), Capability::ALL.len());
     }
 }
