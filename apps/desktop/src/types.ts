@@ -31,8 +31,11 @@ export type EventEnvelope = {
   event_id: string;
   run_id: string;
   trace_id: string;
+  span_id?: string;
+  parent_span_id?: string;
   sequence: number;
   timestamp: string;
+  monotonic_ns?: number;
   harness: string;
   integration_mode: string;
   provenance: Provenance;
@@ -51,6 +54,7 @@ export type EventEnvelope = {
     paths_deleted?: string[];
   };
   error?: { message: string; code?: string; recoverable?: boolean };
+  attributes?: Record<string, unknown>;
 };
 
 export type RunStats = {
@@ -65,4 +69,34 @@ export type RunStats = {
   };
   reported_or_deterministic_cost_by_currency: Record<string, number>;
   sum_event_duration_ns: number;
+};
+
+export type CapabilityEvidence = {
+  provenance: Provenance["level"];
+  source: string;
+  notes?: string;
+};
+
+export type CapabilityReport = {
+  harness: string;
+  integration_modes: string[];
+  capabilities: Record<string, CapabilityEvidence>;
+};
+
+export type RunComparison = {
+  left: { run_id: string; stats: RunStats };
+  right: { run_id: string; stats: RunStats };
+};
+
+export type ArtifactMetadata = {
+  artifact_id: string;
+  run_id: string;
+  event_id?: string;
+  name: string;
+  kind: string;
+  media_type?: string;
+  content_sha256: string;
+  original_size: number;
+  compressed: boolean;
+  created_at: string;
 };
