@@ -9,6 +9,7 @@ members = [
   "crates/agenttrace-collector",
   "crates/adapters/common",
   "crates/adapters/codex",
+  "crates/adapters/claude-code",
 ]
 
 [workspace.package]
