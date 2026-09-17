@@ -2,6 +2,7 @@ use std::{path::Path, str::FromStr, time::Duration};
 
 use agenttrace_protocol::{EventEnvelope, EventKind};
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,
     migrate::MigrateError,
@@ -26,6 +27,16 @@ pub enum StorageError {
     InvalidUuid(#[from] uuid::Error),
     #[error("event sequence {sequence} does not fit SQLite INTEGER")]
     SequenceOverflow { sequence: u64 },
+    #[error("artifact size {size} does not fit SQLite INTEGER")]
+    ArtifactSizeOverflow { size: usize },
+    #[error("artifact event {event_id} does not exist")]
+    ArtifactEventNotFound { event_id: Uuid },
+    #[error("artifact event {event_id} belongs to run {event_run_id}, not requested run {run_id}")]
+    ArtifactEventRunMismatch {
+        event_id: Uuid,
+        event_run_id: Uuid,
+        run_id: Uuid,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +50,26 @@ pub struct RunSummary {
     pub finished_at: Option<DateTime<Utc>>,
     pub last_sequence: u64,
     pub event_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactMetadata {
+    pub artifact_id: Uuid,
+    pub run_id: Uuid,
+    pub event_id: Option<Uuid>,
+    pub name: String,
+    pub kind: String,
+    pub media_type: Option<String>,
+    pub content_sha256: String,
+    pub original_size: u64,
+    pub compressed: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredArtifact {
+    pub metadata: ArtifactMetadata,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -233,6 +264,115 @@ impl TraceStore {
         .await?;
         rows.into_iter().map(row_to_summary).collect()
     }
+
+    pub async fn store_artifact(
+        &self,
+        run_id: Uuid,
+        event_id: Option<Uuid>,
+        name: impl Into<String>,
+        kind: impl Into<String>,
+        media_type: Option<String>,
+        bytes: &[u8],
+    ) -> Result<ArtifactMetadata, StorageError> {
+        let original_size =
+            i64::try_from(bytes.len()).map_err(|_| StorageError::ArtifactSizeOverflow {
+                size: bytes.len(),
+            })?;
+        let name = name.into();
+        let kind = kind.into();
+        let artifact_id = Uuid::new_v4();
+        let created_at = Utc::now();
+        let content_sha256 = format!("{:x}", Sha256::digest(bytes));
+        let (blob, compressed) = encode_payload(bytes.to_vec())?;
+        let mut tx = self.pool.begin().await?;
+
+        if let Some(event_id) = event_id {
+            let event_run_id: Option<String> =
+                sqlx::query_scalar("SELECT run_id FROM events WHERE event_id = ?")
+                    .bind(event_id.to_string())
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            let Some(event_run_id) = event_run_id else {
+                return Err(StorageError::ArtifactEventNotFound { event_id });
+            };
+            let event_run_id = Uuid::parse_str(&event_run_id)?;
+            if event_run_id != run_id {
+                return Err(StorageError::ArtifactEventRunMismatch {
+                    event_id,
+                    event_run_id,
+                    run_id,
+                });
+            }
+        }
+
+        sqlx::query(
+            "INSERT INTO artifacts (artifact_id, run_id, event_id, name, kind, media_type, content_sha256, original_size, artifact_blob, compressed, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(artifact_id.to_string())
+        .bind(run_id.to_string())
+        .bind(event_id.map(|value| value.to_string()))
+        .bind(&name)
+        .bind(&kind)
+        .bind(&media_type)
+        .bind(&content_sha256)
+        .bind(original_size)
+        .bind(blob)
+        .bind(i64::from(compressed))
+        .bind(created_at.to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        Ok(ArtifactMetadata {
+            artifact_id,
+            run_id,
+            event_id,
+            name,
+            kind,
+            media_type,
+            content_sha256,
+            original_size: original_size as u64,
+            compressed,
+            created_at,
+        })
+    }
+
+    pub async fn list_artifacts(
+        &self,
+        run_id: Uuid,
+    ) -> Result<Vec<ArtifactMetadata>, StorageError> {
+        let rows = sqlx::query(
+            "SELECT artifact_id, run_id, event_id, name, kind, media_type, content_sha256, original_size, compressed, created_at \
+             FROM artifacts WHERE run_id = ? ORDER BY created_at ASC, artifact_id ASC",
+        )
+        .bind(run_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_artifact_metadata).collect()
+    }
+
+    pub async fn load_artifact(
+        &self,
+        artifact_id: Uuid,
+    ) -> Result<Option<StoredArtifact>, StorageError> {
+        let row = sqlx::query(
+            "SELECT artifact_id, run_id, event_id, name, kind, media_type, content_sha256, original_size, compressed, created_at, artifact_blob \
+             FROM artifacts WHERE artifact_id = ?",
+        )
+        .bind(artifact_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| {
+            let blob: Vec<u8> = row.try_get("artifact_blob")?;
+            let compressed: i64 = row.try_get("compressed")?;
+            let bytes = decode_payload(blob, compressed != 0)?;
+            let metadata = row_to_artifact_metadata(row)?;
+            Ok(StoredArtifact { metadata, bytes })
+        })
+        .transpose()
+    }
 }
 
 fn row_to_summary(row: sqlx::sqlite::SqliteRow) -> Result<RunSummary, StorageError> {
@@ -258,6 +398,31 @@ fn row_to_summary(row: sqlx::sqlite::SqliteRow) -> Result<RunSummary, StorageErr
             .transpose()?,
         last_sequence: u64::try_from(last_sequence).unwrap_or_default(),
         event_count: u64::try_from(event_count).unwrap_or_default(),
+    })
+}
+
+fn row_to_artifact_metadata(
+    row: sqlx::sqlite::SqliteRow,
+) -> Result<ArtifactMetadata, StorageError> {
+    let event_id: Option<String> = row.try_get("event_id")?;
+    let original_size: i64 = row.try_get("original_size")?;
+    let compressed: i64 = row.try_get("compressed")?;
+    let created_at: String = row.try_get("created_at")?;
+    Ok(ArtifactMetadata {
+        artifact_id: Uuid::parse_str(row.try_get::<String, _>("artifact_id")?.as_str())?,
+        run_id: Uuid::parse_str(row.try_get::<String, _>("run_id")?.as_str())?,
+        event_id: event_id
+            .map(|value| Uuid::parse_str(&value))
+            .transpose()?,
+        name: row.try_get("name")?,
+        kind: row.try_get("kind")?,
+        media_type: row.try_get("media_type")?,
+        content_sha256: row.try_get("content_sha256")?,
+        original_size: u64::try_from(original_size).unwrap_or_default(),
+        compressed: compressed != 0,
+        created_at: DateTime::parse_from_rfc3339(&created_at)
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?
+            .with_timezone(&Utc),
     })
 }
 
@@ -344,5 +509,92 @@ mod tests {
                 .status,
             "interrupted"
         );
+    }
+
+    #[tokio::test]
+    async fn round_trips_compressed_run_artifacts() {
+        let store = TraceStore::open_in_memory().await.unwrap();
+        let event = EventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            HarnessId::Codex,
+            IntegrationMode::StructuredStream,
+            Provenance::native("fixture"),
+            EventKind::RunStarted,
+            json!({}),
+        );
+        store.append_event(&event).await.unwrap();
+
+        let bytes = vec![b'x'; COMPRESSION_THRESHOLD_BYTES * 2];
+        let metadata = store
+            .store_artifact(
+                event.run_id,
+                Some(event.event_id),
+                "terminal.log",
+                "log",
+                Some("text/plain".into()),
+                &bytes,
+            )
+            .await
+            .unwrap();
+        assert!(metadata.compressed);
+        assert_eq!(metadata.original_size, bytes.len() as u64);
+        assert_eq!(metadata.content_sha256.len(), 64);
+        assert_eq!(
+            store.list_artifacts(event.run_id).await.unwrap(),
+            vec![metadata.clone()]
+        );
+
+        let loaded = store
+            .load_artifact(metadata.artifact_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.metadata, metadata);
+        assert_eq!(loaded.bytes, bytes);
+    }
+
+    #[tokio::test]
+    async fn rejects_artifact_event_links_across_runs() {
+        let store = TraceStore::open_in_memory().await.unwrap();
+        let first = EventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            HarnessId::Codex,
+            IntegrationMode::StructuredStream,
+            Provenance::native("fixture"),
+            EventKind::RunStarted,
+            json!({}),
+        );
+        let second = EventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            HarnessId::ClaudeCode,
+            IntegrationMode::StructuredStream,
+            Provenance::native("fixture"),
+            EventKind::RunStarted,
+            json!({}),
+        );
+        store.append_event(&first).await.unwrap();
+        store.append_event(&second).await.unwrap();
+
+        let error = store
+            .store_artifact(
+                first.run_id,
+                Some(second.event_id),
+                "mismatch.txt",
+                "fixture",
+                Some("text/plain".into()),
+                b"data",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            StorageError::ArtifactEventRunMismatch { .. }
+        ));
     }
 }
