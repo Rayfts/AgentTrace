@@ -1,7 +1,10 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use agenttrace_adapter_aider::AiderAdapter;
-use agenttrace_adapter_api::HarnessAdapter;
+use agenttrace_adapter_api::{
+    AdapterError, CapabilityReport, Detection, EventStream, HarnessAdapter, ImportRequest,
+    RunHandle, RunRequest,
+};
 use agenttrace_adapter_claude_code::ClaudeCodeAdapter;
 use agenttrace_adapter_cline::ClineAdapter;
 use agenttrace_adapter_codex::CodexAdapter;
@@ -11,26 +14,98 @@ use agenttrace_adapter_goose::GooseAdapter;
 use agenttrace_adapter_opencode::OpenCodeAdapter;
 use agenttrace_adapter_pi::PiAdapter;
 use agenttrace_adapter_roo_code::RooCodeAdapter;
-use agenttrace_protocol::HarnessId;
+use agenttrace_protocol::{HarnessId, IntegrationMode};
+use async_trait::async_trait;
 
 #[derive(Clone)]
 pub struct AdapterRegistry {
     adapters: BTreeMap<HarnessId, Arc<dyn HarnessAdapter>>,
 }
 
+#[derive(Clone)]
+struct RegisteredAdapter {
+    inner: Arc<dyn HarnessAdapter>,
+}
+
+impl RegisteredAdapter {
+    fn new<T>(adapter: T) -> Self
+    where
+        T: HarnessAdapter + 'static,
+    {
+        Self {
+            inner: Arc::new(adapter),
+        }
+    }
+}
+
+#[async_trait]
+impl HarnessAdapter for RegisteredAdapter {
+    fn id(&self) -> HarnessId {
+        self.inner.id()
+    }
+
+    async fn detect(&self) -> Result<Detection, AdapterError> {
+        let mut detection = self.inner.detect().await?;
+        detection.integration_modes = implemented_modes(self.id(), detection.integration_modes);
+        Ok(detection)
+    }
+
+    async fn capabilities(&self) -> Result<CapabilityReport, AdapterError> {
+        let mut report = self.inner.capabilities().await?;
+        report.integration_modes = implemented_modes(self.id(), report.integration_modes);
+        Ok(report)
+    }
+
+    async fn start(&self, request: RunRequest) -> Result<RunHandle, AdapterError> {
+        self.inner.start(request).await
+    }
+
+    async fn events(&self, run: &RunHandle) -> Result<EventStream, AdapterError> {
+        self.inner.events(run).await
+    }
+
+    async fn cancel(&self, run: &RunHandle) -> Result<(), AdapterError> {
+        self.inner.cancel(run).await
+    }
+
+    async fn import(&self, request: ImportRequest) -> Result<EventStream, AdapterError> {
+        self.inner.import(request).await
+    }
+}
+
+fn implemented_modes(harness: HarnessId, modes: Vec<IntegrationMode>) -> Vec<IntegrationMode> {
+    modes
+        .into_iter()
+        .filter(|mode| match (harness, mode) {
+            (HarnessId::ClaudeCode, IntegrationMode::Hook)
+            | (HarnessId::Pi, IntegrationMode::Rpc)
+            | (HarnessId::Cline, IntegrationMode::Sdk)
+            | (HarnessId::RooCode, IntegrationMode::FilesystemWatch) => false,
+            _ => true,
+        })
+        .collect()
+}
+
+fn registered<T>(adapter: T) -> Arc<dyn HarnessAdapter>
+where
+    T: HarnessAdapter + 'static,
+{
+    Arc::new(RegisteredAdapter::new(adapter))
+}
+
 impl Default for AdapterRegistry {
     fn default() -> Self {
         let adapters: [Arc<dyn HarnessAdapter>; 10] = [
-            Arc::new(CodexAdapter::default()),
-            Arc::new(ClaudeCodeAdapter::default()),
-            Arc::new(OpenCodeAdapter::default()),
-            Arc::new(PiAdapter::default()),
-            Arc::new(GeminiAdapter::default()),
-            Arc::new(AiderAdapter::default()),
-            Arc::new(GooseAdapter::default()),
-            Arc::new(ClineAdapter::default()),
-            Arc::new(RooCodeAdapter),
-            Arc::new(ContinueAdapter::default()),
+            registered(CodexAdapter::default()),
+            registered(ClaudeCodeAdapter::default()),
+            registered(OpenCodeAdapter::default()),
+            registered(PiAdapter::default()),
+            registered(GeminiAdapter::default()),
+            registered(AiderAdapter::default()),
+            registered(GooseAdapter::default()),
+            registered(ClineAdapter::default()),
+            registered(RooCodeAdapter),
+            registered(ContinueAdapter::default()),
         ];
         Self {
             adapters: adapters
@@ -106,5 +181,31 @@ mod tests {
         assert_eq!(AdapterRegistry::parse("gemini-cli"), Some(HarnessId::Gemini));
         assert_eq!(AdapterRegistry::parse("roo"), Some(HarnessId::RooCode));
         assert_eq!(AdapterRegistry::parse("made-up-agent"), None);
+    }
+
+    #[test]
+    fn registry_does_not_advertise_researched_but_unimplemented_modes() {
+        assert_eq!(
+            implemented_modes(
+                HarnessId::ClaudeCode,
+                vec![IntegrationMode::StructuredStream, IntegrationMode::Hook],
+            ),
+            vec![IntegrationMode::StructuredStream]
+        );
+        assert_eq!(
+            implemented_modes(HarnessId::Pi, vec![IntegrationMode::Rpc]),
+            Vec::<IntegrationMode>::new()
+        );
+        assert_eq!(
+            implemented_modes(HarnessId::Cline, vec![IntegrationMode::Sdk]),
+            Vec::<IntegrationMode>::new()
+        );
+        assert_eq!(
+            implemented_modes(
+                HarnessId::RooCode,
+                vec![IntegrationMode::SessionImport, IntegrationMode::FilesystemWatch],
+            ),
+            vec![IntegrationMode::SessionImport]
+        );
     }
 }
