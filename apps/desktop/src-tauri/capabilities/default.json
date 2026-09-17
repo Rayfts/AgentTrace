@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "AgentTrace main window core permissions",
+  "description": "AgentTrace main window core and trace-import permissions",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:default"]
 }
