@@ -88,6 +88,12 @@ export type RunComparison = {
   right: { run_id: string; stats: RunStats };
 };
 
+export type ImportResult = {
+  run_id: string;
+  harness: string;
+  imported_events: number;
+};
+
 export type ArtifactMetadata = {
   artifact_id: string;
   run_id: string;
