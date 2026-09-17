@@ -79,11 +79,6 @@ function aggregateCost(stats?: RunStats) {
   return entries.map(([currency, value]) => `${currency} ${value.toFixed(4)}`).join(" · ");
 }
 
-function sumCosts(stats?: RunStats) {
-  if (!stats) return 0;
-  return Object.values(stats.reported_or_deterministic_cost_by_currency).reduce((sum, value) => sum + value, 0);
-}
-
 export default function App() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string>();
@@ -125,6 +120,18 @@ export default function App() {
     }
   }, []);
 
+  const loadSelectedRun = useCallback(async (runId: string, includeRaw: boolean) => {
+    const [nextEvents, nextStats, nextArtifacts] = await Promise.all([
+      loadEvents(runId, includeRaw),
+      loadStats(runId),
+      listArtifacts(runId),
+    ]);
+    setEvents(nextEvents);
+    setStats(nextStats);
+    setArtifacts(nextArtifacts);
+    setSelectedEventId((current) => current && nextEvents.some((event) => event.event_id === current) ? current : nextEvents[0]?.event_id);
+  }, []);
+
   useEffect(() => {
     void refreshRuns();
     void databaseLocation().then(setDbPath).catch(() => undefined);
@@ -145,19 +152,26 @@ export default function App() {
     }
     let active = true;
     setLoading(true);
-    Promise.all([loadEvents(selectedRunId, rawVisible), loadStats(selectedRunId), listArtifacts(selectedRunId)])
-      .then(([nextEvents, nextStats, nextArtifacts]) => {
-        if (!active) return;
-        setEvents(nextEvents);
-        setStats(nextStats);
-        setArtifacts(nextArtifacts);
-        setSelectedEventId((current) => current && nextEvents.some((event) => event.event_id === current) ? current : nextEvents[0]?.event_id);
-        setError("");
-      })
+    void loadSelectedRun(selectedRunId, rawVisible)
+      .then(() => active && setError(""))
       .catch((cause) => active && setError(String(cause)))
       .finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, [selectedRunId, rawVisible]);
+  }, [selectedRunId, rawVisible, loadSelectedRun]);
+
+  useEffect(() => {
+    if (!selectedRunId || selectedRun?.status !== "running") return;
+    let active = true;
+    const timer = window.setInterval(() => {
+      void loadSelectedRun(selectedRunId, rawVisible)
+        .then(() => active && setError(""))
+        .catch((cause) => active && setError(String(cause)));
+    }, 1500);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [selectedRunId, selectedRun?.status, rawVisible, loadSelectedRun]);
 
   useEffect(() => {
     if (!selectedRun?.harness) {
@@ -182,6 +196,10 @@ export default function App() {
       .catch((cause) => active && setError(String(cause)));
     return () => { active = false; };
   }, [selectedRunId, comparisonRunId]);
+
+  useEffect(() => {
+    if (comparisonRunId === selectedRunId) setComparisonRunId("");
+  }, [comparisonRunId, selectedRunId]);
 
   const visibleRuns = useMemo(() => {
     const normalized = runQuery.trim().toLowerCase();
@@ -367,14 +385,13 @@ function ComparisonPanel({ runs, selectedRunId, comparisonRunId, setComparisonRu
       <CompareMetric label="Observed tokens" left={aggregateTokens(left)} right={aggregateTokens(right)} />
       <CompareMetric label="Retries" left={left.event_kinds.retry ?? 0} right={right.event_kinds.retry ?? 0} />
       <CompareMetric label="Errors" left={(left.event_kinds.error ?? 0) + (left.event_kinds["run.failed"] ?? 0)} right={(right.event_kinds.error ?? 0) + (right.event_kinds["run.failed"] ?? 0)} />
-      <CompareMetric label="Reported cost sum" left={sumCosts(left)} right={sumCosts(right)} decimals={4} />
     </div>}
   </section>;
 }
 
-function CompareMetric({ label, left, right, decimals = 0 }: { label: string; left: number; right: number; decimals?: number }) {
+function CompareMetric({ label, left, right }: { label: string; left: number; right: number }) {
   const delta = right - left;
-  const format = (value: number) => decimals ? value.toFixed(decimals) : value.toLocaleString();
+  const format = (value: number) => value.toLocaleString();
   return <div className="compare-metric"><span>{label}</span><code>{format(left)} → {format(right)}</code><small>{delta >= 0 ? "+" : ""}{format(delta)}</small></div>;
 }
 
@@ -415,11 +432,13 @@ function ExecutionInspector({ event }: { event: EventEnvelope }) {
 }
 
 function TerminalInspector({ event }: { event: EventEnvelope }) {
+  const eligible = event.kind.startsWith("shell.") || event.kind === "process.stdout" || event.kind === "process.stderr" || Boolean(event.command);
+  if (!eligible) return <div className="inspector-content"><Unavailable message="This event is not terminal/process evidence." /></div>;
   const text = findText(event.payload, ["aggregated_output", "stdout", "stderr", "output", "text", "message"])
     ?? (event.command ? [event.command.program, ...event.command.args].join(" ") : undefined);
   return <div className="inspector-content">
     <h3>Terminal evidence</h3>
-    {text ? <pre className="terminal-block">{text}</pre> : <Unavailable message="This event does not expose terminal text." />}
+    {text ? <pre className="terminal-block">{text}</pre> : <Unavailable message="This terminal event does not expose text." />}
   </div>;
 }
 
