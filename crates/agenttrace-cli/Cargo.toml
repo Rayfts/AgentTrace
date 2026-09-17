@@ -16,6 +16,7 @@ agenttrace-protocol = { path = "../agenttrace-protocol" }
 agenttrace-redaction = { path = "../agenttrace-redaction" }
 agenttrace-registry = { path = "../agenttrace-registry" }
 agenttrace-replay = { path = "../agenttrace-replay" }
+agenttrace-server = { path = "../agenttrace-server" }
 agenttrace-storage = { path = "../agenttrace-storage" }
 clap = { version = "4", features = ["derive"] }
 futures.workspace = true
