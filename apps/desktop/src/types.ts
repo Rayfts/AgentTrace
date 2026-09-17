@@ -74,7 +74,7 @@ export type RunStats = {
 export type CapabilityEvidence = {
   provenance: Provenance["level"];
   source: string;
-  notes?: string;
+  notes?: string | null;
 };
 
 export type CapabilityReport = {
@@ -91,10 +91,10 @@ export type RunComparison = {
 export type ArtifactMetadata = {
   artifact_id: string;
   run_id: string;
-  event_id?: string;
+  event_id: string | null;
   name: string;
   kind: string;
-  media_type?: string;
+  media_type: string | null;
   content_sha256: string;
   original_size: number;
   compressed: boolean;
