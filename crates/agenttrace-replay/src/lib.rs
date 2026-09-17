@@ -14,6 +14,17 @@ use uuid::Uuid;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplayRisk {
+    ShellExecution,
+    FilesystemMutation,
+    GitMutation,
+    NetworkAccess,
+    ExternalService,
+    CredentialSensitive,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ReplayCommand {
     pub event_id: Uuid,
@@ -21,6 +32,7 @@ pub struct ReplayCommand {
     pub program: String,
     pub args: Vec<String>,
     pub display: String,
+    pub risks: Vec<ReplayRisk>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,6 +47,7 @@ pub struct ReplayPlan {
 pub struct ReplaySafety {
     pub dry_run_by_default: bool,
     pub exact_allowlist_required: bool,
+    pub risk_tags_advisory: bool,
     pub environment_scrubbed: bool,
     pub detached_git_worktree: bool,
     pub os_sandboxed: bool,
@@ -46,10 +59,11 @@ impl Default for ReplaySafety {
         Self {
             dry_run_by_default: true,
             exact_allowlist_required: true,
+            risk_tags_advisory: true,
             environment_scrubbed: true,
             detached_git_worktree: true,
             os_sandboxed: false,
-            notes: "Replay isolates repository state in a detached Git worktree, but it is not an operating-system sandbox. Allowlisted commands still execute with the current user's OS permissions.",
+            notes: "Replay is dry-run-first. Every executable command requires an exact command or sequence allowlist entry, which confirms the command together with its displayed risk tags. Risk tags are conservative guidance, not an OS sandbox. Allowlisted commands still execute with the current user's OS permissions.",
         }
     }
 }
@@ -173,12 +187,14 @@ pub fn build_plan(events: &[EventEnvelope]) -> ReplayPlan {
             non_shell_events += 1;
             continue;
         };
+        let display = command_display(&command.program, &command.args);
         commands.push(ReplayCommand {
             event_id: event.event_id,
             sequence: event.sequence,
             program: command.program.clone(),
             args: command.args.clone(),
-            display: command_display(&command.program, &command.args),
+            risks: classify_risks(&command.program, &command.args, &display),
+            display,
         });
     }
 
@@ -449,6 +465,141 @@ fn display_arg(value: &str) -> String {
     }
 }
 
+fn classify_risks(program: &str, args: &[String], display: &str) -> Vec<ReplayRisk> {
+    let mut risks = BTreeSet::from([ReplayRisk::ShellExecution]);
+    let normalized = display.to_ascii_lowercase();
+    let executable = if program == "shell" {
+        normalized.split_whitespace().next().unwrap_or("")
+    } else {
+        program.rsplit(['/', '\\']).next().unwrap_or(program).to_ascii_lowercase().leak()
+    };
+
+    if has_filesystem_mutation(&normalized) {
+        risks.insert(ReplayRisk::FilesystemMutation);
+    }
+    if has_git_mutation(&normalized) {
+        risks.insert(ReplayRisk::GitMutation);
+    }
+    if has_network_access(executable, &normalized) {
+        risks.insert(ReplayRisk::NetworkAccess);
+    }
+    if has_external_service(executable, &normalized) {
+        risks.insert(ReplayRisk::ExternalService);
+    }
+    if has_credential_signal(&normalized, args) {
+        risks.insert(ReplayRisk::CredentialSensitive);
+    }
+    risks.into_iter().collect()
+}
+
+fn has_filesystem_mutation(command: &str) -> bool {
+    let first = command.split_whitespace().next().unwrap_or("");
+    matches!(
+        first,
+        "rm" | "mv" | "cp" | "touch" | "mkdir" | "rmdir" | "install" | "truncate" | "tee"
+    ) || command.contains(" > ")
+        || command.contains(" >> ")
+        || command.contains("sed -i")
+        || command.contains("perl -pi")
+        || command.contains("git apply")
+}
+
+fn has_git_mutation(command: &str) -> bool {
+    let Some(rest) = command.trim_start().strip_prefix("git ") else {
+        return false;
+    };
+    let subcommand = rest.split_whitespace().next().unwrap_or("");
+    matches!(
+        subcommand,
+        "add"
+            | "apply"
+            | "branch"
+            | "checkout"
+            | "cherry-pick"
+            | "clean"
+            | "commit"
+            | "merge"
+            | "mv"
+            | "pull"
+            | "push"
+            | "rebase"
+            | "reset"
+            | "restore"
+            | "revert"
+            | "rm"
+            | "stash"
+            | "switch"
+            | "tag"
+            | "worktree"
+    )
+}
+
+fn has_network_access(executable: &str, command: &str) -> bool {
+    matches!(
+        executable,
+        "curl"
+            | "wget"
+            | "ssh"
+            | "scp"
+            | "sftp"
+            | "ftp"
+            | "git"
+            | "gh"
+            | "npm"
+            | "pnpm"
+            | "yarn"
+            | "pip"
+            | "pip3"
+            | "cargo"
+            | "go"
+    ) && (command.contains("http://")
+        || command.contains("https://")
+        || command.contains(" ssh://")
+        || command.starts_with("curl ")
+        || command.starts_with("wget ")
+        || command.starts_with("ssh ")
+        || command.starts_with("scp ")
+        || command.starts_with("sftp ")
+        || command.starts_with("gh ")
+        || command.starts_with("git push")
+        || command.starts_with("git pull")
+        || command.starts_with("git fetch")
+        || command.contains(" install")
+        || command.contains(" publish"))
+}
+
+fn has_external_service(executable: &str, command: &str) -> bool {
+    matches!(
+        executable,
+        "gh" | "aws" | "az" | "gcloud" | "vercel" | "fly" | "heroku" | "kubectl" | "docker"
+    ) || command.contains("api.github.com")
+        || command.contains("openai.com")
+        || command.contains("anthropic.com")
+}
+
+fn has_credential_signal(command: &str, args: &[String]) -> bool {
+    const MARKERS: [&str; 13] = [
+        "authorization",
+        "api-key",
+        "api_key",
+        "apikey",
+        "bearer ",
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "aws_access_key",
+        "aws_secret",
+        "github_token",
+        "openai_api_key",
+    ];
+    MARKERS.iter().any(|marker| command.contains(marker))
+        || args.iter().any(|arg| {
+            let arg = arg.to_ascii_lowercase();
+            MARKERS.iter().any(|marker| arg.contains(marker))
+        })
+}
+
 fn blocked_result(command: ReplayCommand) -> ReplayResult {
     ReplayResult {
         command,
@@ -550,6 +701,10 @@ mod tests {
         let plan = build_plan(&[shell, other]);
         assert_eq!(plan.commands.len(), 1);
         assert_eq!(plan.commands[0].display, "cargo test");
+        assert_eq!(
+            plan.commands[0].risks,
+            vec![ReplayRisk::ShellExecution]
+        );
         assert_eq!(plan.non_shell_events, 1);
         assert!(!plan.safety.os_sandboxed);
     }
@@ -562,6 +717,7 @@ mod tests {
             program: "shell".into(),
             args: vec!["cargo test".into()],
             display: "cargo test".into(),
+            risks: vec![ReplayRisk::ShellExecution],
         };
         assert!(!ReplayPolicy::new().allows(&command));
         assert!(
@@ -583,5 +739,20 @@ mod tests {
             command_display("cargo", &["test".into(), "my test".into()]),
             "cargo test \"my test\""
         );
+    }
+
+    #[test]
+    fn risk_classifier_surfaces_mutation_network_and_credentials() {
+        let event = shell_event(
+            7,
+            "git push https://token@example.com/repo.git && curl -H 'Authorization: Bearer secret' https://example.com > result.json",
+        );
+        let plan = build_plan(&[event]);
+        let risks = &plan.commands[0].risks;
+        assert!(risks.contains(&ReplayRisk::ShellExecution));
+        assert!(risks.contains(&ReplayRisk::FilesystemMutation));
+        assert!(risks.contains(&ReplayRisk::GitMutation));
+        assert!(risks.contains(&ReplayRisk::NetworkAccess));
+        assert!(risks.contains(&ReplayRisk::CredentialSensitive));
     }
 }
