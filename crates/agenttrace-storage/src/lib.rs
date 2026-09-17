@@ -63,8 +63,7 @@ impl TraceStore {
     }
 
     pub async fn open_in_memory() -> Result<Self, StorageError> {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:")?
-            .foreign_keys(true);
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")?.foreign_keys(true);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(options)
@@ -114,8 +113,10 @@ impl TraceStore {
         tx: &mut Transaction<'_, Sqlite>,
         event: &EventEnvelope,
     ) -> Result<(), StorageError> {
-        let sequence = i64::try_from(event.sequence)
-            .map_err(|_| StorageError::SequenceOverflow { sequence: event.sequence })?;
+        let sequence =
+            i64::try_from(event.sequence).map_err(|_| StorageError::SequenceOverflow {
+                sequence: event.sequence,
+            })?;
         let harness = serde_json::to_value(event.harness)?
             .as_str()
             .unwrap_or("unknown")
@@ -306,8 +307,14 @@ mod tests {
             EventKind::RunCompleted,
             json!({"answer": "done"}),
         );
-        store.append_batch(&[first.clone(), second.clone()]).await.unwrap();
-        assert_eq!(store.load_run_events(run_id).await.unwrap(), vec![first, second]);
+        store
+            .append_batch(&[first.clone(), second.clone()])
+            .await
+            .unwrap();
+        assert_eq!(
+            store.load_run_events(run_id).await.unwrap(),
+            vec![first, second]
+        );
         let summary = store.run_summary(run_id).await.unwrap().unwrap();
         assert_eq!(summary.status, "completed");
         assert_eq!(summary.event_count, 2);
@@ -328,6 +335,14 @@ mod tests {
         );
         store.append_event(&event).await.unwrap();
         assert_eq!(store.recover_interrupted_runs().await.unwrap(), 1);
-        assert_eq!(store.run_summary(event.run_id).await.unwrap().unwrap().status, "interrupted");
+        assert_eq!(
+            store
+                .run_summary(event.run_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "interrupted"
+        );
     }
 }

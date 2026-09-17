@@ -1,9 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use agenttrace_process::ProcessEvent;
-use agenttrace_protocol::{
-    EventEnvelope, EventKind, HarnessId, IntegrationMode, Provenance,
-};
+use agenttrace_protocol::{EventEnvelope, EventKind, HarnessId, IntegrationMode, Provenance};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -95,7 +93,9 @@ mod tests {
             trace_id,
             HarnessId::Aider,
             &sequencer,
-            ProcessEvent::Stdout { bytes: b"hello".to_vec() },
+            ProcessEvent::Stdout {
+                bytes: b"hello".to_vec(),
+            },
         );
         assert_eq!(first.sequence, 1);
         assert_eq!(second.sequence, 2);

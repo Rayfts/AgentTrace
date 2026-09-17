@@ -5,16 +5,16 @@ use agenttrace_adapter_api::{
     HarnessAdapter, ImportRequest, RunHandle, RunRequest,
 };
 use agenttrace_adapter_common::{
-    captured_stdout_event, detect_binary, native_harness_event, StructuredRunRegistry,
+    StructuredRunRegistry, captured_stdout_event, detect_binary, native_harness_event,
 };
 use agenttrace_process::ProcessSpec;
 use agenttrace_protocol::{
-    CommandInfo, Cost, CostBasis, ErrorInfo, EventEnvelope, EventKind, FilesystemImpact,
-    HarnessId, IntegrationMode, ModelInfo, ProvenanceLevel, TokenUsage,
+    CommandInfo, Cost, CostBasis, ErrorInfo, EventEnvelope, EventKind, FilesystemImpact, HarnessId,
+    IntegrationMode, ModelInfo, ProvenanceLevel, TokenUsage,
 };
 use async_trait::async_trait;
 use futures::stream;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 const SOURCE: &str = "claude --output-format stream-json --verbose";
@@ -148,7 +148,12 @@ impl HarnessAdapter for ClaudeCodeAdapter {
         let mut sequence = 0_u64;
         let mut events = Vec::new();
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            events.extend(normalize_line(request.run_id, trace_id, &mut sequence, line));
+            events.extend(normalize_line(
+                request.run_id,
+                trace_id,
+                &mut sequence,
+                line,
+            ));
         }
         Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
     }
@@ -156,7 +161,9 @@ impl HarnessAdapter for ClaudeCodeAdapter {
 
 fn claude_stream_command(argv: &[OsString]) -> Result<(OsString, Vec<OsString>), AdapterError> {
     let Some((program, rest)) = argv.split_first() else {
-        return Err(AdapterError::InvalidRequest("missing Claude Code command".into()));
+        return Err(AdapterError::InvalidRequest(
+            "missing Claude Code command".into(),
+        ));
     };
     let mut args = rest.to_vec();
     let has_print = args
@@ -192,7 +199,9 @@ fn claude_stream_command(argv: &[OsString]) -> Result<(OsString, Vec<OsString>),
             let format = args
                 .get(index + 1)
                 .map(|value| value.to_string_lossy().into_owned())
-                .ok_or_else(|| AdapterError::InvalidRequest("--output-format requires a value".into()))?;
+                .ok_or_else(|| {
+                    AdapterError::InvalidRequest("--output-format requires a value".into())
+                })?;
             if format != "stream-json" {
                 return Err(AdapterError::InvalidRequest(format!(
                     "Claude Code output format must be stream-json for tracing, got {format}"
@@ -273,7 +282,10 @@ fn normalize_assistant(
     raw: Value,
 ) -> Vec<EventEnvelope> {
     let mut events = Vec::new();
-    let model_id = raw.pointer("/message/model").and_then(Value::as_str).map(str::to_owned);
+    let model_id = raw
+        .pointer("/message/model")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let usage = token_usage(raw.pointer("/message/usage"));
 
     if let Some(usage_value) = raw.pointer("/message/usage") {
@@ -292,7 +304,11 @@ fn normalize_assistant(
 
     if let Some(content) = raw.pointer("/message/content").and_then(Value::as_array) {
         for block in content {
-            match block.get("type").and_then(Value::as_str).unwrap_or("unknown") {
+            match block
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+            {
                 "text" => {
                     let mut event = native(
                         run_id,
@@ -387,7 +403,10 @@ fn normalize_tool_use(
     block: &Value,
     raw: Value,
 ) -> Vec<EventEnvelope> {
-    let name = block.get("name").and_then(Value::as_str).unwrap_or("unknown");
+    let name = block
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     let input = block.get("input").cloned().unwrap_or(Value::Null);
     let mut events = vec![native(
         run_id,
@@ -411,7 +430,9 @@ fn normalize_tool_use(
             );
             event.command = Some(CommandInfo {
                 program: "shell".into(),
-                args: (!command.is_empty()).then(|| vec![command.to_owned()]).unwrap_or_default(),
+                args: (!command.is_empty())
+                    .then(|| vec![command.to_owned()])
+                    .unwrap_or_default(),
                 cwd: None,
                 exit_code: None,
             });
@@ -428,7 +449,9 @@ fn normalize_tool_use(
                 raw,
             );
             let mut impact = FilesystemImpact::default();
-            if let Some(path) = path { impact.paths_read.push(path.to_owned()); }
+            if let Some(path) = path {
+                impact.paths_read.push(path.to_owned());
+            }
             event.filesystem_impact = Some(impact);
             events.push(event);
         }
@@ -443,7 +466,9 @@ fn normalize_tool_use(
                 raw,
             );
             let mut impact = FilesystemImpact::default();
-            if let Some(path) = path { impact.paths_written.push(path.to_owned()); }
+            if let Some(path) = path {
+                impact.paths_written.push(path.to_owned());
+            }
             event.filesystem_impact = Some(impact);
             events.push(event);
         }
@@ -458,7 +483,9 @@ fn normalize_tool_use(
                 raw,
             );
             let mut impact = FilesystemImpact::default();
-            if let Some(path) = path { impact.paths_written.push(path.to_owned()); }
+            if let Some(path) = path {
+                impact.paths_written.push(path.to_owned());
+            }
             event.filesystem_impact = Some(impact);
             events.push(event);
         }
@@ -493,7 +520,10 @@ fn normalize_user(
     if let Some(content) = raw.pointer("/message/content").and_then(Value::as_array) {
         for block in content {
             if block.get("type").and_then(Value::as_str) == Some("tool_result") {
-                let is_error = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                let is_error = block
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 let mut event = native(
                     run_id,
                     trace_id,
@@ -504,7 +534,11 @@ fn normalize_user(
                 );
                 if is_error {
                     event.error = Some(ErrorInfo {
-                        message: block.get("content").and_then(Value::as_str).unwrap_or("tool failed").to_owned(),
+                        message: block
+                            .get("content")
+                            .and_then(Value::as_str)
+                            .unwrap_or("tool failed")
+                            .to_owned(),
                         code: None,
                         recoverable: None,
                     });
@@ -526,7 +560,9 @@ fn normalize_user(
                 raw,
             );
             let mut impact = FilesystemImpact::default();
-            if let Some(path) = path { impact.paths_written.push(path.to_owned()); }
+            if let Some(path) = path {
+                impact.paths_written.push(path.to_owned());
+            }
             event.filesystem_impact = Some(impact);
             events.push(event);
         }
@@ -540,7 +576,10 @@ fn normalize_system(
     sequence: &mut u64,
     raw: Value,
 ) -> Vec<EventEnvelope> {
-    let subtype = raw.get("subtype").and_then(Value::as_str).unwrap_or("unknown");
+    let subtype = raw
+        .get("subtype")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     match subtype {
         "init" | "start" => vec![native(
             run_id,
@@ -593,7 +632,11 @@ fn normalize_system(
                 run_id,
                 trace_id,
                 sequence,
-                if terminal { EventKind::SubagentCompleted } else { EventKind::Checkpoint },
+                if terminal {
+                    EventKind::SubagentCompleted
+                } else {
+                    EventKind::Checkpoint
+                },
                 raw.clone(),
                 raw,
             )]
@@ -638,12 +681,19 @@ fn normalize_result(
         events.push(usage_event);
     }
 
-    let is_error = raw.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+    let is_error = raw
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut final_event = native(
         run_id,
         trace_id,
         sequence,
-        if is_error { EventKind::RunFailed } else { EventKind::RunCompleted },
+        if is_error {
+            EventKind::RunFailed
+        } else {
+            EventKind::RunCompleted
+        },
         json!({
             "subtype": raw.get("subtype"),
             "result": raw.get("result"),
@@ -659,7 +709,9 @@ fn normalize_result(
         final_event.duration_ns = Some(ms.saturating_mul(1_000_000));
     }
     if let Some(api_ms) = raw.get("duration_api_ms").and_then(Value::as_u64) {
-        final_event.attributes.insert("duration_api_ms".into(), json!(api_ms));
+        final_event
+            .attributes
+            .insert("duration_api_ms".into(), json!(api_ms));
     }
     if let Some(cost) = raw.get("total_cost_usd").and_then(Value::as_f64) {
         final_event.cost = Some(Cost {
@@ -676,7 +728,10 @@ fn normalize_result(
                 .and_then(Value::as_str)
                 .unwrap_or("Claude Code run failed")
                 .to_owned(),
-            code: raw.get("subtype").and_then(Value::as_str).map(str::to_owned),
+            code: raw
+                .get("subtype")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             recoverable: None,
         });
     }
@@ -773,13 +828,22 @@ mod tests {
             EventKind::ModelUsage,
             EventKind::RunCompleted,
         ] {
-            assert!(events.iter().any(|event| event.kind == kind), "missing {kind:?}");
+            assert!(
+                events.iter().any(|event| event.kind == kind),
+                "missing {kind:?}"
+            );
         }
         let completed = events
             .iter()
             .find(|event| event.kind == EventKind::RunCompleted)
             .unwrap();
-        assert_eq!(completed.cost.as_ref().map(|cost| cost.amount), Some(0.0123));
-        assert!(events.iter().all(|event| event.raw_source.is_some() || matches!(event.kind, EventKind::ProcessStdout)));
+        assert_eq!(
+            completed.cost.as_ref().map(|cost| cost.amount),
+            Some(0.0123)
+        );
+        assert!(
+            events.iter().all(|event| event.raw_source.is_some()
+                || matches!(event.kind, EventKind::ProcessStdout))
+        );
     }
 }

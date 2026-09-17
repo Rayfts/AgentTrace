@@ -5,16 +5,16 @@ use agenttrace_adapter_api::{
     HarnessAdapter, ImportRequest, RunHandle, RunRequest,
 };
 use agenttrace_adapter_common::{
-    captured_stdout_event, detect_binary, native_harness_event, StructuredRunRegistry,
+    StructuredRunRegistry, captured_stdout_event, detect_binary, native_harness_event,
 };
 use agenttrace_process::ProcessSpec;
 use agenttrace_protocol::{
-    CommandInfo, ErrorInfo, EventEnvelope, EventKind, FilesystemImpact, HarnessId,
-    IntegrationMode, ProvenanceLevel, TokenUsage,
+    CommandInfo, ErrorInfo, EventEnvelope, EventKind, FilesystemImpact, HarnessId, IntegrationMode,
+    ProvenanceLevel, TokenUsage,
 };
 use async_trait::async_trait;
 use futures::stream;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 const SOURCE: &str = "codex exec --json";
@@ -33,7 +33,10 @@ impl HarnessAdapter for CodexAdapter {
     async fn detect(&self) -> Result<Detection, AdapterError> {
         detect_binary(
             "codex",
-            vec![IntegrationMode::StructuredStream, IntegrationMode::SessionImport],
+            vec![
+                IntegrationMode::StructuredStream,
+                IntegrationMode::SessionImport,
+            ],
         )
         .await
     }
@@ -67,7 +70,10 @@ impl HarnessAdapter for CodexAdapter {
             CapabilityEvidence {
                 level: ProvenanceLevel::Native,
                 source: "assistant_message items from codex exec --json".into(),
-                notes: Some("assistant responses are exposed; full provider request bodies are not claimed".into()),
+                notes: Some(
+                    "assistant responses are exposed; full provider request bodies are not claimed"
+                        .into(),
+                ),
             },
         );
         capabilities.insert(
@@ -75,7 +81,9 @@ impl HarnessAdapter for CodexAdapter {
             CapabilityEvidence {
                 level: ProvenanceLevel::Unavailable,
                 source: SOURCE.into(),
-                notes: Some("the exec event stream does not expose complete context contents".into()),
+                notes: Some(
+                    "the exec event stream does not expose complete context contents".into(),
+                ),
             },
         );
         capabilities.insert(
@@ -83,13 +91,19 @@ impl HarnessAdapter for CodexAdapter {
             CapabilityEvidence {
                 level: ProvenanceLevel::Unavailable,
                 source: SOURCE.into(),
-                notes: Some("cost is not fabricated from token counts without an explicit price table".into()),
+                notes: Some(
+                    "cost is not fabricated from token counts without an explicit price table"
+                        .into(),
+                ),
             },
         );
 
         Ok(CapabilityReport {
             harness: HarnessId::Codex,
-            integration_modes: vec![IntegrationMode::StructuredStream, IntegrationMode::SessionImport],
+            integration_modes: vec![
+                IntegrationMode::StructuredStream,
+                IntegrationMode::SessionImport,
+            ],
             capabilities,
         })
     }
@@ -117,7 +131,12 @@ impl HarnessAdapter for CodexAdapter {
         let mut sequence = 0_u64;
         let mut events = Vec::new();
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            events.extend(normalize_line(request.run_id, trace_id, &mut sequence, line));
+            events.extend(normalize_line(
+                request.run_id,
+                trace_id,
+                &mut sequence,
+                line,
+            ));
         }
         Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
     }
@@ -137,7 +156,10 @@ fn codex_exec_command(argv: &[OsString]) -> Result<(OsString, Vec<OsString>), Ad
             )
         })?;
     let has_json = args.iter().any(|arg| {
-        matches!(arg.to_string_lossy().as_ref(), "--json" | "--experimental-json")
+        matches!(
+            arg.to_string_lossy().as_ref(),
+            "--json" | "--experimental-json"
+        )
     });
     if !has_json {
         args.insert(exec_position + 1, OsString::from("--json"));
@@ -194,7 +216,11 @@ pub fn normalize_line(
                 json!({"error": raw.get("error")}),
                 raw,
             );
-            event.error = Some(ErrorInfo { message, code: None, recoverable: None });
+            event.error = Some(ErrorInfo {
+                message,
+                code: None,
+                recoverable: None,
+            });
             vec![event]
         }
         "item.started" | "item.updated" | "item.completed" => {
@@ -268,7 +294,11 @@ fn normalize_item(
             run_id,
             trace_id,
             sequence,
-            if completed { EventKind::ReasoningCompleted } else { EventKind::ReasoningStarted },
+            if completed {
+                EventKind::ReasoningCompleted
+            } else {
+                EventKind::ReasoningStarted
+            },
             json!({"id": item.get("id"), "text": item.get("text")}),
             raw,
         )],
@@ -278,7 +308,11 @@ fn normalize_item(
             run_id,
             trace_id,
             sequence,
-            if completed { EventKind::McpResponse } else { EventKind::McpRequest },
+            if completed {
+                EventKind::McpResponse
+            } else {
+                EventKind::McpRequest
+            },
             json!({
                 "id": item.get("id"),
                 "server": item.get("server"),
@@ -294,15 +328,12 @@ fn normalize_item(
                 .and_then(Value::as_str)
                 .unwrap_or("Codex error")
                 .to_owned();
-            let mut event = native(
-                run_id,
-                trace_id,
-                sequence,
-                EventKind::Error,
-                item,
-                raw,
-            );
-            event.error = Some(ErrorInfo { message, code: None, recoverable: None });
+            let mut event = native(run_id, trace_id, sequence, EventKind::Error, item, raw);
+            event.error = Some(ErrorInfo {
+                message,
+                code: None,
+                recoverable: None,
+            });
             vec![event]
         }
         _ => vec![native(
@@ -325,12 +356,19 @@ fn normalize_command(
     raw: Value,
 ) -> Vec<EventEnvelope> {
     let command = item.get("command").and_then(Value::as_str).unwrap_or("");
-    let exit_code = item.get("exit_code").and_then(Value::as_i64).map(|value| value as i32);
+    let exit_code = item
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .map(|value| value as i32);
     let mut event = native(
         run_id,
         trace_id,
         sequence,
-        if completed { EventKind::ShellOutput } else { EventKind::ShellCommand },
+        if completed {
+            EventKind::ShellOutput
+        } else {
+            EventKind::ShellCommand
+        },
         if completed {
             json!({"id": item.get("id"), "output": item.get("aggregated_output"), "exit_code": exit_code})
         } else {
@@ -340,7 +378,9 @@ fn normalize_command(
     );
     event.command = Some(CommandInfo {
         program: "shell".into(),
-        args: (!command.is_empty()).then(|| vec![command.to_owned()]).unwrap_or_default(),
+        args: (!command.is_empty())
+            .then(|| vec![command.to_owned()])
+            .unwrap_or_default(),
         cwd: None,
         exit_code,
     });
@@ -451,12 +491,36 @@ mod tests {
             .flat_map(|line| normalize_line(run_id, trace_id, &mut sequence, line))
             .collect();
 
-        assert!(events.iter().any(|event| event.kind == EventKind::ShellCommand));
-        assert!(events.iter().any(|event| event.kind == EventKind::ShellOutput));
-        assert!(events.iter().any(|event| event.kind == EventKind::FileWrite));
-        assert!(events.iter().any(|event| event.kind == EventKind::McpRequest));
-        assert!(events.iter().any(|event| event.kind == EventKind::ModelUsage));
-        assert!(events.iter().any(|event| event.kind == EventKind::RunCompleted));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == EventKind::ShellCommand)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == EventKind::ShellOutput)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == EventKind::FileWrite)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == EventKind::McpRequest)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == EventKind::ModelUsage)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == EventKind::RunCompleted)
+        );
         assert!(events.iter().all(|event| event.sequence > 0));
     }
 }

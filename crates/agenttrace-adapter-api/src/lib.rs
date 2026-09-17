@@ -1,9 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    ffi::OsString,
-    path::PathBuf,
-    pin::Pin,
-};
+use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, pin::Pin};
 
 use agenttrace_protocol::{EventEnvelope, HarnessId, IntegrationMode, ProvenanceLevel};
 use async_trait::async_trait;
@@ -139,6 +134,9 @@ mod tests {
             integration_modes: vec![IntegrationMode::ProcessWrap],
             capabilities: BTreeMap::new(),
         };
-        assert_eq!(report.status(Capability::McpActivity), ProvenanceLevel::Unavailable);
+        assert_eq!(
+            report.status(Capability::McpActivity),
+            ProvenanceLevel::Unavailable
+        );
     }
 }

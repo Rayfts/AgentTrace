@@ -38,9 +38,15 @@ impl ProcessSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessEvent {
-    Started { pid: Option<u32> },
-    Stdout { bytes: Vec<u8> },
-    Stderr { bytes: Vec<u8> },
+    Started {
+        pid: Option<u32>,
+    },
+    Stdout {
+        bytes: Vec<u8>,
+    },
+    Stderr {
+        bytes: Vec<u8>,
+    },
     Exited {
         code: Option<i32>,
         success: bool,
@@ -131,7 +137,9 @@ impl SupervisedProcess {
     }
 
     pub fn cancel(&mut self) -> bool {
-        self.cancel.take().is_some_and(|sender| sender.send(()).is_ok())
+        self.cancel
+            .take()
+            .is_some_and(|sender| sender.send(()).is_ok())
     }
 }
 

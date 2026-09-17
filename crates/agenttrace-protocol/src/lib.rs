@@ -303,8 +303,14 @@ mod tests {
 
     #[test]
     fn event_kind_uses_stable_wire_name() {
-        assert_eq!(serde_json::to_string(&EventKind::ToolCall).unwrap(), "\"tool.call\"");
-        assert_eq!(serde_json::to_string(&EventKind::ContextCompacted).unwrap(), "\"context.compacted\"");
+        assert_eq!(
+            serde_json::to_string(&EventKind::ToolCall).unwrap(),
+            "\"tool.call\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EventKind::ContextCompacted).unwrap(),
+            "\"context.compacted\""
+        );
     }
 
     #[test]
@@ -328,7 +334,10 @@ mod tests {
         );
         let encoded = serde_json::to_string(&event).unwrap();
         let decoded: EventEnvelope = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(decoded.provenance.unavailable_fields, vec!["usage.reasoning_output_tokens"]);
+        assert_eq!(
+            decoded.provenance.unavailable_fields,
+            vec!["usage.reasoning_output_tokens"]
+        );
         assert_eq!(decoded.schema_version, SCHEMA_VERSION);
     }
 }

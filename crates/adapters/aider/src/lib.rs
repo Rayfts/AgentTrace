@@ -1,12 +1,188 @@
-use std::{collections::BTreeMap,ffi::OsString};
-use agenttrace_adapter_api::{AdapterError,Capability,CapabilityEvidence,CapabilityReport,Detection,EventStream,HarnessAdapter,ImportRequest,RunHandle,RunRequest};
-use agenttrace_adapter_common::{captured_stdout_event_mode,detect_binary,native_harness_event_mode,StructuredRunRegistry};
+use agenttrace_adapter_api::{
+    AdapterError, Capability, CapabilityEvidence, CapabilityReport, Detection, EventStream,
+    HarnessAdapter, ImportRequest, RunHandle, RunRequest,
+};
+use agenttrace_adapter_common::{
+    StructuredRunRegistry, captured_stdout_event_mode, detect_binary, native_harness_event_mode,
+};
 use agenttrace_process::ProcessSpec;
-use agenttrace_protocol::{ErrorInfo,EventEnvelope,EventKind,HarnessId,IntegrationMode,ModelInfo,ProvenanceLevel};
-use async_trait::async_trait;use futures::stream;use serde_json::{json,Value};use uuid::Uuid;
-const ANALYTICS:&str="aider --analytics-log JSONL";
-#[derive(Clone,Default)]pub struct AiderAdapter{runs:StructuredRunRegistry}
-#[async_trait]impl HarnessAdapter for AiderAdapter{fn id(&self)->HarnessId{HarnessId::Aider}async fn detect(&self)->Result<Detection,AdapterError>{detect_binary("aider",vec![IntegrationMode::ProcessWrap,IntegrationMode::LogImport]).await}async fn capabilities(&self)->Result<CapabilityReport,AdapterError>{let mut c=BTreeMap::new();for x in [Capability::TerminalOutput,Capability::Failures,Capability::Duration]{c.insert(x,CapabilityEvidence{level:ProvenanceLevel::Native,source:"AgentTrace process wrapper".into(),notes:None});}for x in [Capability::TokenUsage,Capability::RawEvents]{c.insert(x,CapabilityEvidence{level:ProvenanceLevel::Native,source:ANALYTICS.into(),notes:Some("local analytics import; Aider deliberately excludes prompts/code from analytics".into())});}c.insert(Capability::ModelInteractions,CapabilityEvidence{level:ProvenanceLevel::Native,source:ANALYTICS.into(),notes:Some("model identity and aggregate token metadata only; request/response content is unavailable from analytics".into())});for x in [Capability::ToolCalls,Capability::ToolResults,Capability::McpActivity,Capability::Approvals,Capability::Subagents,Capability::Cost]{c.insert(x,CapabilityEvidence{level:ProvenanceLevel::Unavailable,source:ANALYTICS.into(),notes:None});}Ok(CapabilityReport{harness:HarnessId::Aider,integration_modes:vec![IntegrationMode::ProcessWrap,IntegrationMode::LogImport],capabilities:c})}async fn start(&self,r:RunRequest)->Result<RunHandle,AdapterError>{let Some((p,a))=r.argv.split_first()else{return Err(AdapterError::InvalidRequest("missing Aider command".into()))};let mut spec=ProcessSpec::new(p.clone(),r.cwd);spec.args=a.to_vec();self.runs.launch_mode(r.run_id,HarnessId::Aider,IntegrationMode::ProcessWrap,spec,normalize_process_line).await}async fn events(&self,r:&RunHandle)->Result<EventStream,AdapterError>{self.runs.events(r.run_id)}async fn cancel(&self,r:&RunHandle)->Result<(),AdapterError>{self.runs.cancel(r.run_id)}async fn import(&self,r:ImportRequest)->Result<EventStream,AdapterError>{let text=tokio::fs::read_to_string(&r.path).await?;let t=Uuid::new_v4();let mut s=0;let mut out=Vec::new();for l in text.lines().filter(|l|!l.trim().is_empty()){out.extend(normalize_analytics(r.run_id,t,&mut s,l));}Ok(Box::pin(stream::iter(out.into_iter().map(Ok))))}}
-fn normalize_process_line(r:Uuid,t:Uuid,s:&mut u64,line:&str)->Vec<EventEnvelope>{vec![captured_stdout_event_mode(r,t,s,HarnessId::Aider,IntegrationMode::ProcessWrap,line)]}
-pub fn normalize_analytics(r:Uuid,t:Uuid,s:&mut u64,line:&str)->Vec<EventEnvelope>{let Ok(raw)=serde_json::from_str::<Value>(line)else{return vec![]};let name=raw.get("event").and_then(Value::as_str).unwrap_or("unknown");let props=raw.get("properties").cloned().unwrap_or_else(||json!({}));let kind=if name=="launched"{EventKind::RunStarted}else if name=="message_send"{EventKind::ModelUsage}else if name.contains("error")||name.contains("exception"){EventKind::Error}else{EventKind::Checkpoint};let mut e=native_harness_event_mode(r,t,s,HarnessId::Aider,IntegrationMode::LogImport,ANALYTICS,kind,json!({"event":name,"properties":props}),raw);if let Some(m)=e.payload.pointer("/properties/main_model").and_then(Value::as_str){e.model=Some(ModelInfo{id:m.into(),provider:None});}if kind==EventKind::Error{e.error=Some(ErrorInfo{message:name.into(),code:Some(name.into()),recoverable:None});}vec![e]}
-#[cfg(test)]mod tests{use super::*;#[test]fn analytics_is_conservative(){let mut s=0;let e=normalize_analytics(Uuid::new_v4(),Uuid::new_v4(),&mut s,r#"{"event":"message_send","properties":{"main_model":"gemini/gemini-2.5-pro","total_tokens":123},"time":1}"#);assert_eq!(e[0].kind,EventKind::ModelUsage);assert_eq!(e[0].payload.pointer("/properties/total_tokens").and_then(Value::as_u64),Some(123));}}
+use agenttrace_protocol::{
+    ErrorInfo, EventEnvelope, EventKind, HarnessId, IntegrationMode, ModelInfo, ProvenanceLevel,
+};
+use async_trait::async_trait;
+use futures::stream;
+use serde_json::{Value, json};
+use std::{collections::BTreeMap, ffi::OsString};
+use uuid::Uuid;
+const ANALYTICS: &str = "aider --analytics-log JSONL";
+#[derive(Clone, Default)]
+pub struct AiderAdapter {
+    runs: StructuredRunRegistry,
+}
+#[async_trait]
+impl HarnessAdapter for AiderAdapter {
+    fn id(&self) -> HarnessId {
+        HarnessId::Aider
+    }
+    async fn detect(&self) -> Result<Detection, AdapterError> {
+        detect_binary(
+            "aider",
+            vec![IntegrationMode::ProcessWrap, IntegrationMode::LogImport],
+        )
+        .await
+    }
+    async fn capabilities(&self) -> Result<CapabilityReport, AdapterError> {
+        let mut c = BTreeMap::new();
+        for x in [
+            Capability::TerminalOutput,
+            Capability::Failures,
+            Capability::Duration,
+        ] {
+            c.insert(
+                x,
+                CapabilityEvidence {
+                    level: ProvenanceLevel::Native,
+                    source: "AgentTrace process wrapper".into(),
+                    notes: None,
+                },
+            );
+        }
+        for x in [Capability::TokenUsage, Capability::RawEvents] {
+            c.insert(x,CapabilityEvidence{level:ProvenanceLevel::Native,source:ANALYTICS.into(),notes:Some("local analytics import; Aider deliberately excludes prompts/code from analytics".into())});
+        }
+        c.insert(Capability::ModelInteractions,CapabilityEvidence{level:ProvenanceLevel::Native,source:ANALYTICS.into(),notes:Some("model identity and aggregate token metadata only; request/response content is unavailable from analytics".into())});
+        for x in [
+            Capability::ToolCalls,
+            Capability::ToolResults,
+            Capability::McpActivity,
+            Capability::Approvals,
+            Capability::Subagents,
+            Capability::Cost,
+        ] {
+            c.insert(
+                x,
+                CapabilityEvidence {
+                    level: ProvenanceLevel::Unavailable,
+                    source: ANALYTICS.into(),
+                    notes: None,
+                },
+            );
+        }
+        Ok(CapabilityReport {
+            harness: HarnessId::Aider,
+            integration_modes: vec![IntegrationMode::ProcessWrap, IntegrationMode::LogImport],
+            capabilities: c,
+        })
+    }
+    async fn start(&self, r: RunRequest) -> Result<RunHandle, AdapterError> {
+        let Some((p, a)) = r.argv.split_first() else {
+            return Err(AdapterError::InvalidRequest("missing Aider command".into()));
+        };
+        let mut spec = ProcessSpec::new(p.clone(), r.cwd);
+        spec.args = a.to_vec();
+        self.runs
+            .launch_mode(
+                r.run_id,
+                HarnessId::Aider,
+                IntegrationMode::ProcessWrap,
+                spec,
+                normalize_process_line,
+            )
+            .await
+    }
+    async fn events(&self, r: &RunHandle) -> Result<EventStream, AdapterError> {
+        self.runs.events(r.run_id)
+    }
+    async fn cancel(&self, r: &RunHandle) -> Result<(), AdapterError> {
+        self.runs.cancel(r.run_id)
+    }
+    async fn import(&self, r: ImportRequest) -> Result<EventStream, AdapterError> {
+        let text = tokio::fs::read_to_string(&r.path).await?;
+        let t = Uuid::new_v4();
+        let mut s = 0;
+        let mut out = Vec::new();
+        for l in text.lines().filter(|l| !l.trim().is_empty()) {
+            out.extend(normalize_analytics(r.run_id, t, &mut s, l));
+        }
+        Ok(Box::pin(stream::iter(out.into_iter().map(Ok))))
+    }
+}
+fn normalize_process_line(r: Uuid, t: Uuid, s: &mut u64, line: &str) -> Vec<EventEnvelope> {
+    vec![captured_stdout_event_mode(
+        r,
+        t,
+        s,
+        HarnessId::Aider,
+        IntegrationMode::ProcessWrap,
+        line,
+    )]
+}
+pub fn normalize_analytics(r: Uuid, t: Uuid, s: &mut u64, line: &str) -> Vec<EventEnvelope> {
+    let Ok(raw) = serde_json::from_str::<Value>(line) else {
+        return vec![];
+    };
+    let name = raw
+        .get("event")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let props = raw.get("properties").cloned().unwrap_or_else(|| json!({}));
+    let kind = if name == "launched" {
+        EventKind::RunStarted
+    } else if name == "message_send" {
+        EventKind::ModelUsage
+    } else if name.contains("error") || name.contains("exception") {
+        EventKind::Error
+    } else {
+        EventKind::Checkpoint
+    };
+    let mut e = native_harness_event_mode(
+        r,
+        t,
+        s,
+        HarnessId::Aider,
+        IntegrationMode::LogImport,
+        ANALYTICS,
+        kind,
+        json!({"event":name,"properties":props}),
+        raw,
+    );
+    if let Some(m) = e
+        .payload
+        .pointer("/properties/main_model")
+        .and_then(Value::as_str)
+    {
+        e.model = Some(ModelInfo {
+            id: m.into(),
+            provider: None,
+        });
+    }
+    if kind == EventKind::Error {
+        e.error = Some(ErrorInfo {
+            message: name.into(),
+            code: Some(name.into()),
+            recoverable: None,
+        });
+    }
+    vec![e]
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn analytics_is_conservative() {
+        let mut s = 0;
+        let e = normalize_analytics(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            &mut s,
+            r#"{"event":"message_send","properties":{"main_model":"gemini/gemini-2.5-pro","total_tokens":123},"time":1}"#,
+        );
+        assert_eq!(e[0].kind, EventKind::ModelUsage);
+        assert_eq!(
+            e[0].payload
+                .pointer("/properties/total_tokens")
+                .and_then(Value::as_u64),
+            Some(123)
+        );
+    }
+}

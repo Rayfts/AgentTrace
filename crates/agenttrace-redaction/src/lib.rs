@@ -23,10 +23,16 @@ impl Default for RedactionConfig {
         let patterns = [
             ("openai_key", r"\bsk-[A-Za-z0-9_-]{16,}\b"),
             ("anthropic_key", r"\bsk-ant-[A-Za-z0-9_-]{16,}\b"),
-            ("github_token", r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b"),
+            (
+                "github_token",
+                r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b",
+            ),
             ("aws_access_key", r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
             ("bearer", r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}"),
-            ("private_key", r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+            (
+                "private_key",
+                r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----",
+            ),
         ];
         Self {
             rules: patterns
@@ -76,9 +82,12 @@ impl Redactor {
     }
 
     pub fn redact_str(&self, input: &str) -> String {
-        self.config.rules.iter().fold(input.to_owned(), |value, rule| {
-            rule.regex.replace_all(&value, REDACTED).into_owned()
-        })
+        self.config
+            .rules
+            .iter()
+            .fold(input.to_owned(), |value, rule| {
+                rule.regex.replace_all(&value, REDACTED).into_owned()
+            })
     }
 
     pub fn redact_json(&self, value: &mut Value) {
@@ -108,10 +117,11 @@ impl Redactor {
 
     pub fn is_sensitive_path(&self, path: &str) -> bool {
         let normalized = path.replace('\\', "/").to_ascii_lowercase();
-        self.config
-            .sensitive_path_fragments
-            .iter()
-            .any(|fragment| normalized.split('/').any(|part| part == fragment.to_ascii_lowercase()))
+        self.config.sensitive_path_fragments.iter().any(|fragment| {
+            normalized
+                .split('/')
+                .any(|part| part == fragment.to_ascii_lowercase())
+        })
     }
 
     fn is_sensitive_key(&self, key: &str) -> bool {
@@ -170,8 +180,15 @@ mod tests {
     #[test]
     fn environment_is_empty_by_default() {
         let redactor = Redactor::default();
-        let env = [("PATH", "/bin"), ("OPENAI_API_KEY", "sk-abcdefghijklmnopqrstuvwxyz")];
-        assert!(EnvironmentPolicy::default().filter(env, &redactor).is_empty());
+        let env = [
+            ("PATH", "/bin"),
+            ("OPENAI_API_KEY", "sk-abcdefghijklmnopqrstuvwxyz"),
+        ];
+        assert!(
+            EnvironmentPolicy::default()
+                .filter(env, &redactor)
+                .is_empty()
+        );
     }
 
     #[test]
