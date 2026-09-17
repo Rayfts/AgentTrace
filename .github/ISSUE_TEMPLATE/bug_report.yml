@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a reproducible AgentTrace defect
+title: "[bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, credentials, proprietary source code, or unredacted private traces. Security vulnerabilities belong in the private reporting path described in SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: AgentTrace version or commit
+      placeholder: v0.x.y or commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - CLI
+        - Desktop
+        - Local API
+        - Storage
+        - Replay
+        - Adapter
+        - Protocol
+        - CI / packaging
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: harness
+    attributes:
+      label: Harness
+      description: If adapter-related, name the coding-agent harness and version.
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11, macOS 26, Ubuntu 26.04, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Give the smallest safe sequence of commands or fixture needed to reproduce the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Add redacted logs, event kinds, stack traces, or screenshots if useful.
