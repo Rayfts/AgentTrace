@@ -183,8 +183,12 @@ pub fn normalize_line(
         )];
     };
 
-    let event_type = raw.get("type").and_then(Value::as_str).unwrap_or("unknown");
-    match event_type {
+    let event_type = raw
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned();
+    match event_type.as_str() {
         "thread.started" => vec![native(
             run_id,
             trace_id,
@@ -224,7 +228,7 @@ pub fn normalize_line(
             vec![event]
         }
         "item.started" | "item.updated" | "item.completed" => {
-            normalize_item(run_id, trace_id, sequence, event_type, raw)
+            normalize_item(run_id, trace_id, sequence, &event_type, raw)
         }
         _ => vec![native(
             run_id,
