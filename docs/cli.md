@@ -53,9 +53,12 @@ Raw-source data is hidden by default in `inspect` output. `--raw` exposes the al
 ```bash
 agenttrace export <run-id>
 agenttrace export <run-id> --output trace.jsonl
+agenttrace export <run-id> --raw --output trace-with-raw.jsonl
 ```
 
-The export format is newline-delimited normalized `EventEnvelope` JSON.
+The export format is newline-delimited normalized `EventEnvelope` JSON. Export re-applies the **current** built-in secret/path redaction policy even though normal run/import persistence is already redacted. Raw-source payloads are excluded by default; `--raw` includes them only after the same export-time redaction pass.
+
+Static redaction cannot guarantee that arbitrary proprietary data or unknown secret formats are removed. Review exports before sharing them outside your trusted boundary.
 
 ## Compare
 
@@ -95,12 +98,14 @@ Replay uses a detached Git worktree and a scrubbed environment. It is not an OS 
 
 ## Local API
 
-The local API is a separate binary:
+The primary workflow is built into the main CLI:
 
 ```bash
-agenttrace-server
-agenttrace-server --db .agenttrace/agenttrace.db
-agenttrace-server --bind 127.0.0.1:4319
+agenttrace serve
+agenttrace --db .agenttrace/agenttrace.db serve
+agenttrace serve --bind 127.0.0.1:4319
 ```
 
-The server refuses non-loopback binds unless `--allow-remote` is explicitly supplied.
+A standalone `agenttrace-server` binary is also shipped for service-oriented deployments and uses the same Rust server implementation.
+
+The server refuses non-loopback binds unless `--allow-remote` is explicitly supplied. Event and export endpoints hide raw-source payloads by default and re-apply the current redaction policy before returning trace data. Add `?raw=true` only when raw-source evidence is intentionally required.
