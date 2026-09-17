@@ -11,6 +11,7 @@ publish = false
 agenttrace-adapter-codex = { path = "../adapters/codex" }
 agenttrace-protocol = { path = "../agenttrace-protocol" }
 agenttrace-storage = { path = "../agenttrace-storage" }
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
