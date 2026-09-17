@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeSet,
-    ffi::OsStr,
     path::{Path, PathBuf},
     process::Stdio,
     time::{Duration, Instant},
@@ -149,6 +148,17 @@ pub enum ReplayError {
     Io(#[from] std::io::Error),
 }
 
+struct ReplayWorkspace {
+    _temp: TempDir,
+    path: PathBuf,
+}
+
+impl ReplayWorkspace {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 pub fn build_plan(events: &[EventEnvelope]) -> ReplayPlan {
     let source_run_id = events.first().map(|event| event.run_id);
     let mut commands = Vec::new();
@@ -186,7 +196,11 @@ pub async fn execute_plan(
     options: &ReplayOptions,
 ) -> Result<ReplayReport, ReplayError> {
     let repository = repository_root(&options.repo).await?;
-    let allowed_count = plan.commands.iter().filter(|command| policy.allows(command)).count();
+    let allowed_count = plan
+        .commands
+        .iter()
+        .filter(|command| policy.allows(command))
+        .count();
 
     if allowed_count == 0 {
         let results = plan
@@ -272,16 +286,17 @@ async fn repository_root(repo: &Path) -> Result<PathBuf, ReplayError> {
     Ok(PathBuf::from(root))
 }
 
-async fn create_worktree(repo: &Path, revision: &str) -> Result<TempDir, ReplayError> {
-    let workspace = tempfile::Builder::new()
+async fn create_worktree(repo: &Path, revision: &str) -> Result<ReplayWorkspace, ReplayError> {
+    let temp = tempfile::Builder::new()
         .prefix("agenttrace-replay-")
         .tempdir()
         .map_err(|error| ReplayError::Workspace(error.to_string()))?;
+    let path = temp.path().join("worktree");
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(["worktree", "add", "--detach"])
-        .arg(workspace.path())
+        .arg(&path)
         .arg(revision)
         .stdin(Stdio::null())
         .output()
@@ -292,7 +307,7 @@ async fn create_worktree(repo: &Path, revision: &str) -> Result<TempDir, ReplayE
             String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         ));
     }
-    Ok(workspace)
+    Ok(ReplayWorkspace { _temp: temp, path })
 }
 
 async fn remove_worktree(repo: &Path, workspace: &Path) -> Result<(), ReplayError> {
@@ -424,9 +439,9 @@ fn command_display(program: &str, args: &[String]) -> String {
 
 fn display_arg(value: &str) -> String {
     if value.is_empty()
-        || value
-            .chars()
-            .any(|character| character.is_whitespace() || "\"'`$&;|<>*?()[]{}".contains(character))
+        || value.chars().any(|character| {
+            character.is_whitespace() || "\"'`$&;|<>*?()[]{}".contains(character)
+        })
     {
         serde_json::to_string(value).unwrap_or_else(|_| "\"<unprintable>\"".into())
     } else {
@@ -492,16 +507,9 @@ fn duration_ms(duration: Duration) -> u64 {
     duration.as_millis().min(u64::MAX as u128) as u64
 }
 
-#[allow(dead_code)]
-fn _os_str_is_nonempty(value: &OsStr) -> bool {
-    !value.is_empty()
-}
-
 #[cfg(test)]
 mod tests {
-    use agenttrace_protocol::{
-        CommandInfo, HarnessId, IntegrationMode, Provenance,
-    };
+    use agenttrace_protocol::{CommandInfo, HarnessId, IntegrationMode, Provenance};
     use serde_json::json;
 
     use super::*;
@@ -556,9 +564,17 @@ mod tests {
             display: "cargo test".into(),
         };
         assert!(!ReplayPolicy::new().allows(&command));
-        assert!(ReplayPolicy::new().allow_command("cargo test").allows(&command));
+        assert!(
+            ReplayPolicy::new()
+                .allow_command("cargo test")
+                .allows(&command)
+        );
         assert!(ReplayPolicy::new().allow_sequence(9).allows(&command));
-        assert!(!ReplayPolicy::new().allow_command("cargo test --all").allows(&command));
+        assert!(
+            !ReplayPolicy::new()
+                .allow_command("cargo test --all")
+                .allows(&command)
+        );
     }
 
     #[test]
