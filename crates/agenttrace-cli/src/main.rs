@@ -12,7 +12,7 @@ use agenttrace_protocol::{EventEnvelope, EventKind, Provenance, ProvenanceLevel}
 use agenttrace_redaction::{REDACTED, Redactor};
 use agenttrace_registry::AdapterRegistry;
 use agenttrace_replay::{ReplayOptions, ReplayPolicy, build_plan, execute_plan};
-use agenttrace_server::{ServerConfig, serve as serve_api};
+use agenttrace_server::{ServerConfig, serve_with_redactor as serve_api};
 use agenttrace_storage::{RunSummary, TraceStore};
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
@@ -29,6 +29,10 @@ struct Cli {
     /// SQLite trace database. Defaults to .agenttrace/agenttrace.db in the current directory.
     #[arg(long, global = true)]
     db: Option<PathBuf>,
+
+    /// Additive JSON redaction profile. Built-in safe rules always remain enabled.
+    #[arg(long, global = true)]
+    redaction_config: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -116,30 +120,36 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let cli = Cli::parse();
+    let Cli {
+        db,
+        redaction_config,
+        command,
+    } = Cli::parse();
     let registry = AdapterRegistry::default();
+    let custom_redaction = redaction_config.is_some();
+    let redactor = load_redactor(redaction_config.as_deref()).await?;
 
-    match cli.command {
+    match command {
         Command::Harnesses => print_harnesses(&registry).await?,
         Command::Capabilities { harness } => print_capabilities(&registry, harness.as_deref()).await?,
-        Command::Doctor => doctor(&registry).await?,
+        Command::Doctor => doctor(&registry, custom_redaction).await?,
         Command::Run {
             harness,
             cwd,
             command,
-        } => run(&registry, cli.db.as_deref(), &harness, cwd, command).await?,
+        } => run(&registry, db.as_deref(), &harness, cwd, command, &redactor).await?,
         Command::Import { harness, path } => {
-            import(&registry, cli.db.as_deref(), &harness, path).await?
+            import(&registry, db.as_deref(), &harness, path, &redactor).await?
         }
-        Command::Inspect { run_id, raw } => inspect(cli.db.as_deref(), run_id, raw).await?,
+        Command::Inspect { run_id, raw } => inspect(db.as_deref(), run_id, raw, &redactor).await?,
         Command::Export {
             run_id,
             output,
             raw,
-        } => export(cli.db.as_deref(), run_id, output.as_deref(), raw).await?,
-        Command::Compare { left, right } => compare(cli.db.as_deref(), left, right).await?,
+        } => export(db.as_deref(), run_id, output.as_deref(), raw, &redactor).await?,
+        Command::Compare { left, right } => compare(db.as_deref(), left, right).await?,
         Command::Serve { bind, allow_remote } => {
-            serve_local(&registry, cli.db.as_deref(), bind, allow_remote).await?
+            serve_local(&registry, db.as_deref(), bind, allow_remote, redactor).await?
         }
         Command::Replay {
             run_id,
@@ -152,7 +162,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             continue_on_error,
         } => {
             replay(
-                cli.db.as_deref(),
+                db.as_deref(),
                 run_id,
                 repo,
                 revision,
@@ -167,6 +177,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+async fn load_redactor(path: Option<&Path>) -> Result<Redactor, Box<dyn Error>> {
+    match path {
+        Some(path) => {
+            let profile = tokio::fs::read_to_string(path).await?;
+            Ok(Redactor::from_profile_json(&profile)?)
+        }
+        None => Ok(Redactor::default()),
+    }
 }
 
 async fn print_harnesses(registry: &AdapterRegistry) -> Result<(), Box<dyn Error>> {
@@ -199,7 +219,10 @@ async fn print_capabilities(
     Ok(())
 }
 
-async fn doctor(registry: &AdapterRegistry) -> Result<(), Box<dyn Error>> {
+async fn doctor(
+    registry: &AdapterRegistry,
+    custom_redaction: bool,
+) -> Result<(), Box<dyn Error>> {
     let mut installed = 0_u64;
     let mut harnesses = Vec::new();
     for (harness, adapter) in registry.iter() {
@@ -219,7 +242,8 @@ async fn doctor(registry: &AdapterRegistry) -> Result<(), Box<dyn Error>> {
         "installed_harnesses": installed,
         "harnesses": harnesses,
         "security": {
-            "redaction": "enabled-before-persistence-and-reapplied-on-export",
+            "redaction": "enabled-before-persistence-and-reapplied-on-read-export",
+            "custom_redaction_profile": custom_redaction,
             "environment_capture": "disabled-by-default"
         }
     }))?;
@@ -232,10 +256,10 @@ async fn run(
     harness: &str,
     cwd: PathBuf,
     command: Vec<OsString>,
+    redactor: &Redactor,
 ) -> Result<(), Box<dyn Error>> {
     let adapter = adapter_for(registry, harness)?;
     let store = open_store(db).await?;
-    let redactor = Redactor::default();
     let run_id = Uuid::new_v4();
     let handle = adapter
         .start(RunRequest {
@@ -251,7 +275,7 @@ async fn run(
 
     eprintln!("agenttrace run {run_id}");
     while let Some(event) = stream.next().await {
-        let event = redact_event(event?, &redactor)?;
+        let event = redact_event(event?, redactor)?;
         semantic_terminal_seen |= matches!(event.kind, EventKind::RunCompleted | EventKind::RunFailed);
         store.append_event(&event).await?;
         println!("{}", serde_json::to_string(&event)?);
@@ -260,6 +284,7 @@ async fn run(
 
     if !semantic_terminal_seen {
         if let Some(terminal) = derive_terminal_from_process_exit(last_event.as_ref()) {
+            let terminal = redact_event(terminal, redactor)?;
             store.append_event(&terminal).await?;
             println!("{}", serde_json::to_string(&terminal)?);
         }
@@ -272,16 +297,16 @@ async fn import(
     db: Option<&Path>,
     harness: &str,
     path: PathBuf,
+    redactor: &Redactor,
 ) -> Result<(), Box<dyn Error>> {
     let adapter = adapter_for(registry, harness)?;
     let store = open_store(db).await?;
-    let redactor = Redactor::default();
     let run_id = Uuid::new_v4();
     let mut stream = adapter.import(ImportRequest { run_id, path }).await?;
     let mut count = 0_u64;
 
     while let Some(event) = stream.next().await {
-        let event = redact_event(event?, &redactor)?;
+        let event = redact_event(event?, redactor)?;
         store.append_event(&event).await?;
         count += 1;
     }
@@ -290,17 +315,24 @@ async fn import(
     Ok(())
 }
 
-async fn inspect(db: Option<&Path>, run_id: Uuid, raw: bool) -> Result<(), Box<dyn Error>> {
+async fn inspect(
+    db: Option<&Path>,
+    run_id: Uuid,
+    raw: bool,
+    redactor: &Redactor,
+) -> Result<(), Box<dyn Error>> {
     let store = open_store(db).await?;
     let summary = store
         .run_summary(run_id)
         .await?
         .ok_or_else(|| input_error(format!("run {run_id} was not found")))?;
-    let mut events = store.load_run_events(run_id).await?;
-    if !raw {
-        for event in &mut events {
+    let mut events = Vec::new();
+    for event in store.load_run_events(run_id).await? {
+        let mut event = redact_event(event, redactor)?;
+        if !raw {
             event.raw_source = None;
         }
+        events.push(event);
     }
     print_json(&json!({
         "summary": run_summary_json(&summary),
@@ -314,6 +346,7 @@ async fn export(
     run_id: Uuid,
     output: Option<&Path>,
     include_raw: bool,
+    redactor: &Redactor,
 ) -> Result<(), Box<dyn Error>> {
     let store = open_store(db).await?;
     let events = store.load_run_events(run_id).await?;
@@ -321,10 +354,9 @@ async fn export(
         return Err(input_error(format!("run {run_id} was not found")).into());
     }
 
-    let redactor = Redactor::default();
     let mut body = String::new();
     for event in events {
-        let mut event = redact_event(event, &redactor)?;
+        let mut event = redact_event(event, redactor)?;
         if !include_raw {
             event.raw_source = None;
         }
@@ -369,12 +401,13 @@ async fn serve_local(
     db: Option<&Path>,
     bind: SocketAddr,
     allow_remote: bool,
+    redactor: Redactor,
 ) -> Result<(), Box<dyn Error>> {
     let store = open_store(db).await?;
     store.recover_interrupted_runs().await?;
     let config = ServerConfig { bind, allow_remote };
     eprintln!("AgentTrace API: http://{}", config.bind);
-    serve_api(config, store, registry.clone()).await?;
+    serve_api(config, store, registry.clone(), redactor).await?;
     Ok(())
 }
 
@@ -603,11 +636,11 @@ fn run_summary_json(summary: &RunSummary) -> Value {
     json!({
         "run_id": summary.run_id,
         "trace_id": summary.trace_id,
-        "harness": summary.harness,
-        "integration_mode": summary.integration_mode,
-        "status": summary.status,
+        "harness": &summary.harness,
+        "integration_mode": &summary.integration_mode,
+        "status": &summary.status,
         "started_at": summary.started_at,
-        "finished_at": summary.finished_at,
+        "finished_at": &summary.finished_at,
         "last_sequence": summary.last_sequence,
         "event_count": summary.event_count,
     })
