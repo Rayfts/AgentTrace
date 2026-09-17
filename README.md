@@ -6,7 +6,7 @@ When an agent changes a repository, AgentTrace records the evidence needed to in
 
 AgentTrace does not force ten different agent runtimes into a fictional common API. Each adapter uses the strongest legitimate integration surface available for that harness, and the normalized protocol records how trustworthy every observation is.
 
-> **Status:** pre-1.0. The core protocol, storage, process supervision, redaction, ten initial adapters, CLI, replay engine, local API, and Tauri/React inspector are implemented on the current development line. Compatibility may still change before the first stable release.
+> **Status:** pre-1.0. The core protocol, storage, process supervision, redaction, ten initial adapters, CLI, replay engine, local API, adapter contract fixtures, benchmark suite, and Tauri/React inspector are implemented on the current development line. Compatibility may still change before the first stable release.
 
 ## Telemetry truth model
 
@@ -51,6 +51,8 @@ cargo install --path crates/agenttrace-cli
 cargo install --path crates/agenttrace-server
 ```
 
+`agenttrace serve` is the primary local-API workflow. The standalone `agenttrace-server` binary remains available for service-oriented deployments and packaging.
+
 ## Quick start
 
 Check installed harnesses and their telemetry capabilities:
@@ -73,6 +75,12 @@ Inspect, export, and compare traces:
 agenttrace inspect <run-id>
 agenttrace export <run-id> --output trace.jsonl
 agenttrace compare <left-run-id> <right-run-id>
+```
+
+Export re-applies the current redaction policy. Raw-source payloads are omitted by default; include the already-redacted raw source explicitly when needed:
+
+```bash
+agenttrace export <run-id> --raw --output trace-with-raw.jsonl
 ```
 
 Import a supported existing trace/session format:
@@ -106,13 +114,19 @@ Replay runs in a temporary detached Git worktree with a scrubbed environment and
 
 ## Local API
 
-Run the loopback-first API against the same SQLite database:
+Run the loopback-first API against the same SQLite database through the main CLI:
+
+```bash
+agenttrace --db .agenttrace/agenttrace.db serve
+```
+
+The standalone binary exposes the same server library:
 
 ```bash
 agenttrace-server --db .agenttrace/agenttrace.db
 ```
 
-The default bind is `127.0.0.1:4319`. Non-loopback binding is rejected unless `--allow-remote` is explicitly supplied.
+The default bind is `127.0.0.1:4319`. Non-loopback binding is rejected unless `--allow-remote` is explicitly supplied. Event and export endpoints hide raw-source payloads by default and re-apply the current redaction policy before returning trace data.
 
 Current endpoints include health, harness detection, capability evidence, run listing/detail, event retrieval, JSONL export, and deterministic run statistics.
 
@@ -130,26 +144,33 @@ Set `AGENTTRACE_DB` before launch to inspect an existing CLI database. The deskt
 
 ## Architecture
 
-The Rust core is split into small crates for the protocol, adapter contract, process supervision, collection, storage, redaction, adapter registry, replay, CLI, and local API. Harness-specific adapters live under `crates/adapters/`.
+The Rust core is split into small crates for the protocol, adapter contract, process supervision, collection, storage, redaction, adapter registry, replay, CLI, local API, cross-adapter contract tests, and performance benchmarks. Harness-specific adapters live under `crates/adapters/`.
 
 Key design documents:
 
 - [`docs/architecture.md`](docs/architecture.md) — system boundaries and data flow;
 - [`docs/trace-format.md`](docs/trace-format.md) — normalized event schema;
+- [`docs/adapter-authoring.md`](docs/adapter-authoring.md) — adapter contract and fixture requirements;
 - [`docs/harnesses.md`](docs/harnesses.md) — adapter capability matrix;
 - [`docs/research/reference-adapters.md`](docs/research/reference-adapters.md) — upstream integration research;
 - [`docs/security.md`](docs/security.md) — data-handling design;
 - [`SECURITY.md`](SECURITY.md) — vulnerability reporting and security boundaries.
 
-## Performance benchmark
+## Performance benchmarks
 
-A reproducible storage benchmark exercises the same SQLite append/load path as normal traces:
+The main benchmark suite uses a deterministic large-trace recipe (`fixtures/benchmarks/large-trace.json`) and measures ingestion throughput, full-trace load, JSONL export, Rust-heap peak deltas for load/export, and Codex normalization throughput:
+
+```bash
+cargo run --release -p agenttrace-benchmarks
+```
+
+The fixture currently expands to 100,000 normalized events rather than committing a huge generated trace blob. A smaller storage-only microbenchmark is also available:
 
 ```bash
 cargo run --release -p agenttrace-storage --example ingest_benchmark -- 10000
 ```
 
-It reports measured write/read duration and events per second for the current machine. No benchmark number is hard-coded into project claims.
+Benchmarks print measurements for the current machine. AgentTrace does not hard-code performance claims from one development environment.
 
 ## Development
 
@@ -168,7 +189,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) before changing adapters or telemetry c
 
 ## Security and privacy
 
-Redaction is applied before normal persistence, environment capture is deny-by-default, the API is loopback-first, and replay requires explicit execution permission plus allowlisting. Traces can still contain sensitive engineering data; treat trace databases and exports as local sensitive artifacts.
+Redaction is applied before normal persistence and again on CLI/API export surfaces, environment capture is deny-by-default, the API is loopback-first, and replay requires explicit execution permission plus allowlisting. Traces can still contain sensitive engineering data; treat trace databases and exports as local sensitive artifacts.
 
 ## License
 
