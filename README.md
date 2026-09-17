@@ -2,7 +2,7 @@
 
 AgentTrace is a local-first debugger, recorder, profiler, and observability platform for AI coding agents.
 
-When an agent changes a repository, AgentTrace records the evidence needed to inspect **what actually happened**: model interactions where exposed, tool activity, shell commands, terminal output, file changes, Git activity, browser activity when explicitly exposed, MCP activity, subagents, context changes, retries, failures, timing, token/cost samples, raw harness events, and stored artifacts.
+When an agent changes a repository, AgentTrace records the evidence needed to inspect **what actually happened**: model interactions where exposed, tool activity, shell commands, terminal output, file changes, Git activity, browser activity when explicitly exposed, MCP activity, subagents, context changes, retries, failures, timing/latency, token/cost samples, raw harness events, and stored artifacts.
 
 AgentTrace does not force ten different runtimes into a fictional common API. Product-facing capability reports enumerate all supported adapter capability categories and mark each one `native`, `inferred`, `derived`, or `unavailable`. Researched upstream integration surfaces are not advertised as implemented until AgentTrace has a real collector/control path for them.
 
@@ -19,7 +19,7 @@ Every normalized event carries provenance:
 
 AgentTrace never upgrades missing telemetry into a guess. Unknown structured records are preserved conservatively where safe so normalization can improve later without pretending an older collector observed something it did not.
 
-Protocol schema v2 also reserves `browser.navigation`, `browser.action`, `browser.network`, and `browser.console`. Those names make browser evidence representable without authorizing adapters to invent it: an adapter emits `browser.*` only when its upstream surface explicitly identifies browser activity.
+Protocol schema v2 reserves `browser.navigation`, `browser.action`, `browser.network`, and `browser.console`, and adds optional typed `latency_ns`. Browser events are emitted only from verified browser evidence. Latency is kept separate from duration and remains absent unless the upstream surface exposes an explicit latency-like measurement; Claude Code's native `duration_api_ms` is one verified example.
 
 ## Supported harnesses
 
@@ -110,9 +110,9 @@ Replay is deliberately narrower than “rerun the agent.” Only recorded `shell
 agenttrace replay <run-id> --repo /path/to/repository
 ```
 
-The dry-run plan attaches conservative risk tags such as `filesystem_mutation`, `git_mutation`, `network_access`, `external_service`, and `credential_sensitive` when recognizable. These tags are advisory visibility, not an execution grant or sandbox.
+The dry-run plan attaches conservative risk tags such as `filesystem_mutation`, `git_mutation`, `network_access`, `external_service`, and `credential_sensitive` when recognizable. These tags are visibility for the exact command being reviewed; they are not a claim of OS-level isolation.
 
-Execution still requires `--execute` plus an exact command or sequence allowlist:
+Execution requires `--execute` plus an exact command or sequence allowlist:
 
 ```bash
 agenttrace replay <run-id> \
@@ -121,7 +121,7 @@ agenttrace replay <run-id> \
   --allow "cargo test"
 ```
 
-An exact allowlist entry confirms that specific recorded command together with the risk tags displayed in the plan. Replay runs in a temporary detached Git worktree with a scrubbed environment and a per-command timeout. This protects normal repository state, but it is **not an operating-system sandbox**. See [`docs/replay.md`](docs/replay.md).
+The exact approval applies only to that recorded command or sequence. Replay runs in a temporary detached Git worktree with a scrubbed environment and a per-command timeout. This protects normal repository state, but it is **not an operating-system sandbox**. See [`docs/replay.md`](docs/replay.md).
 
 ## Local API
 
@@ -153,7 +153,7 @@ Run-scoped artifacts can be stored with optional event linkage, SHA-256 content 
 - native file-picker trace/session import through the real adapter registry;
 - searchable/filterable timeline, including schema-v2 `browser.*` events when actually present;
 - complete capability evidence indicators;
-- observed-only token, event-distribution, and duration charts;
+- observed-only token, explicit API-latency, event-distribution, and duration charts;
 - payload, raw, execution, terminal, diff, and relations inspectors;
 - unified and side-by-side diff rendering only when actual patch text is exposed;
 - span/subagent/context views only when corresponding trace evidence exists;
@@ -183,6 +183,7 @@ Key documents:
 - [`docs/harnesses.md`](docs/harnesses.md)
 - [`docs/research/reference-adapters.md`](docs/research/reference-adapters.md)
 - [`docs/security.md`](docs/security.md)
+- [`docs/testing.md`](docs/testing.md)
 - [`SECURITY.md`](SECURITY.md)
 
 ## Performance benchmarks
@@ -212,7 +213,7 @@ cargo check --workspace --all-targets
 
 CI is configured to run core checks across Linux/macOS/Windows, build the React frontend, check the Tauri shell on Windows, and run dependency auditing. Tagged `v*` releases package `agenttrace` and `agenttrace-server` for Linux, macOS, and Windows with SHA-256 checksum files.
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) before changing adapters or telemetry claims.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) before changing adapters or telemetry claims. A full local validation sequence is documented in [`docs/testing.md`](docs/testing.md).
 
 ## Security and privacy
 
@@ -222,4 +223,4 @@ Application-level encrypted storage is not currently implemented; see [`docs/sec
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+Apache-2.0. See [`LICENSE`](LICENSE).
