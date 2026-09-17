@@ -19,6 +19,7 @@ agenttrace-storage = { path = "../../../crates/agenttrace-storage" }
 futures = "0.3"
 serde_json = "1"
 tauri = "2"
+tauri-plugin-dialog = "2"
 uuid = { version = "1", features = ["serde"] }
 
 # Keep the desktop runtime independent from the core workspace MSRV.
