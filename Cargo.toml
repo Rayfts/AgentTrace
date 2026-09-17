@@ -8,6 +8,7 @@ members = [
   "crates/agenttrace-process",
   "crates/agenttrace-collector",
   "crates/agenttrace-registry",
+  "crates/agenttrace-cli",
   "crates/adapters/common",
   "crates/adapters/codex",
   "crates/adapters/claude-code",
