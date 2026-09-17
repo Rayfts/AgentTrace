@@ -1,0 +1,15 @@
+[package]
+name="agenttrace-adapter-goose"
+version.workspace=true
+edition.workspace=true
+rust-version.workspace=true
+license.workspace=true
+repository.workspace=true
+[dependencies]
+agenttrace-adapter-api={path="../../agenttrace-adapter-api"}
+agenttrace-adapter-common={path="../common"}
+agenttrace-process={path="../../agenttrace-process"}
+agenttrace-protocol={path="../../agenttrace-protocol"}
+async-trait.workspace=true
+serde_json.workspace=true
+uuid.workspace=true

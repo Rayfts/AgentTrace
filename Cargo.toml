@@ -13,6 +13,11 @@ members = [
   "crates/adapters/opencode",
   "crates/adapters/pi",
   "crates/adapters/gemini",
+  "crates/adapters/aider",
+  "crates/adapters/goose",
+  "crates/adapters/cline",
+  "crates/adapters/roo-code",
+  "crates/adapters/continue",
 ]
 
 [workspace.package]
