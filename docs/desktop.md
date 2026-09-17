@@ -9,8 +9,8 @@ The desktop app is a local visualization layer over the same SQLite trace format
 - run browser with status, harness, timestamp, and local bookmarks;
 - native file-picker import routed through the same harness adapters used by `agenttrace import`;
 - live event/stat/artifact refresh while the selected run is active;
-- event timeline with category filters and text search, including schema-v2 `browser.*` events when a future/current adapter actually emits verified browser evidence;
-- observed-only charts for token usage, normalized event distribution, and longest event durations;
+- event timeline with category filters and text search, including schema-v2 `browser.*` events when an adapter actually emits verified browser evidence;
+- observed-only charts for token usage, explicit API latency, normalized event distribution, and longest event durations;
 - complete capability evidence strip from the product adapter registry, including explicit unavailable categories;
 - explicit native / inferred / derived / unavailable provenance badges;
 - payload, raw-source, execution, terminal, diff, and relations inspectors;
@@ -26,7 +26,7 @@ The desktop app is a local visualization layer over the same SQLite trace format
 - persistent **System / Dark / Light** themes;
 - compact DevTools-style layout intended for high-density debugging rather than decorative dashboards.
 
-When evidence is absent, the relevant panel says `unavailable`; the frontend does not infer a patch, span, browser action, subagent, context change, terminal log, token count, duration, or capability merely to fill the screen.
+When evidence is absent, the relevant panel says `unavailable`; the frontend does not infer a patch, span, browser action, subagent, context change, terminal log, token count, duration, latency, or capability merely to fill the screen.
 
 ## Importing traces
 
@@ -41,6 +41,7 @@ Import support remains harness-specific. If an adapter does not implement sessio
 Charts only visualize fields already present in the trace:
 
 - **Token usage** — input, output, cached-input, and reasoning tokens that were actually reported/normalized;
+- **API latency** — events with a typed `latency_ns` value derived from a semantically explicit upstream latency signal; Claude Code `duration_api_ms` is the first implemented example;
 - **Event distribution** — counts of normalized event kinds;
 - **Longest observed durations** — events with a real `duration_ns` value.
 
