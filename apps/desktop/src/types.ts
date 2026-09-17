@@ -36,6 +36,8 @@ export type EventEnvelope = {
   sequence: number;
   timestamp: string;
   monotonic_ns?: number;
+  duration_ns?: number;
+  latency_ns?: number;
   harness: string;
   integration_mode: string;
   provenance: Provenance;
@@ -45,7 +47,6 @@ export type EventEnvelope = {
   model?: { id: string; provider?: string };
   usage?: TokenUsage;
   cost?: { amount: number; currency: string; basis: string; price_table_version?: string };
-  duration_ns?: number;
   command?: { program: string; args: string[]; cwd?: string; exit_code?: number };
   filesystem_impact?: {
     paths_read?: string[];
