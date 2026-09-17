@@ -11,7 +11,7 @@ Legend: **N** native, **I** inferred, **D** derived, **—** unavailable/not cur
 | OpenCode | `opencode run --format json` + JSONL import | N | N | N | N | N | N | N when emitted | N |
 | Pi | `pi --mode json` + JSONL import; RPC declared separately | N | N | N | — | — | N | N when reported | N |
 | Gemini CLI | `--output-format stream-json` + JSONL import | N | N | N | — | — | N | — | N |
-| Aider | process wrapping + `--analytics-log` JSONL import | — | — | — | — | — | N from analytics | — | N for analytics records |
+| Aider | process wrapping + `--analytics-log` JSONL import | — | — | — | — | — | N from analytics | N when reported | N for analytics records |
 | Goose | `goose run --output-format stream-json` | N | — | — | N | — | N when emitted | N when reported | N |
 | Cline | `cline --json` NDJSON | N | N | N | — | N | N | N when exposed | N |
 | Roo Code | persisted task/API-message JSON import | N | — | — | — | — | — | — | N |
@@ -63,9 +63,9 @@ Adapter strategy: AgentTrace launches or imports `stream-json`. Current normaliz
 
 Official repository: <https://github.com/Aider-AI/aider>
 
-Aider provides one-shot message modes, local history files, Git integration, and local analytics logging. The analytics log deliberately avoids prompts/code while retaining aggregate execution/model metadata.
+Aider provides one-shot message modes, local history files, Git integration, and local analytics logging. The analytics log deliberately avoids prompts/code while retaining aggregate execution/model metadata. Current upstream sample analytics records expose model identity, `prompt_tokens`, `completion_tokens`, `total_tokens`, per-message `cost`, and cumulative `total_cost` when the provider reports them.
 
-Adapter strategy: the implemented adapter has two honest surfaces: native process supervision for stdout/stderr/failure/duration and import of explicitly supplied Aider analytics JSONL for model identity/aggregate token metadata. It does **not** currently claim Git-diff reconstruction, file events, shell-command classification, tool calls, cost, MCP, or subagents. Those remain future work until implemented with contract tests.
+Adapter strategy: the implemented adapter has two honest surfaces: native process supervision for stdout/stderr/failure/duration and import of explicitly supplied Aider analytics JSONL. The analytics normalizer maps model identity, prompt/completion token counts, and per-message reported USD cost into typed AgentTrace fields while preserving the raw record. It does **not** currently claim Git-diff reconstruction, file events, shell-command classification, tool calls, MCP, or subagents. Those remain future work until implemented with contract tests.
 
 ## Goose
 
@@ -107,4 +107,4 @@ Because upstream CLIs evolve, capability reports and contract fixtures must be u
 
 ## Fixture policy
 
-Adapters with structured import paths use sanitized fixture records modeled on verified public wire shapes. Fixtures contain no real credentials, private home paths, repository secrets, or user prompts. Contract tests should cover both positive normalization and negative capabilities: absence is a feature when upstream or the implemented adapter does not expose a field.
+Adapters with structured import paths use sanitized fixture records modeled on verified public wire shapes. Fixtures contain no real credentials, private home paths, repository secrets, or user prompts. Contract tests cover positive normalization and negative capabilities: absence is a feature when upstream or the implemented adapter does not expose a field.
