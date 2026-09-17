@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     error::Error,
     ffi::OsString,
+    net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -11,6 +12,7 @@ use agenttrace_protocol::{EventEnvelope, EventKind, Provenance, ProvenanceLevel}
 use agenttrace_redaction::{REDACTED, Redactor};
 use agenttrace_registry::AdapterRegistry;
 use agenttrace_replay::{ReplayOptions, ReplayPolicy, build_plan, execute_plan};
+use agenttrace_server::{ServerConfig, serve as serve_api};
 use agenttrace_storage::{RunSummary, TraceStore};
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
@@ -65,14 +67,26 @@ enum Command {
         #[arg(long)]
         raw: bool,
     },
-    /// Export a stored run as newline-delimited AgentTrace JSON.
+    /// Export a stored run as sanitized newline-delimited AgentTrace JSON.
     Export {
         run_id: Uuid,
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Include raw-source payloads after applying the current redaction policy.
+        #[arg(long)]
+        raw: bool,
     },
     /// Compare two stored runs using deterministic trace statistics.
     Compare { left: Uuid, right: Uuid },
+    /// Serve the local AgentTrace HTTP API.
+    Serve {
+        /// Socket address to bind. Non-loopback addresses require --allow-remote.
+        #[arg(long, default_value = "127.0.0.1:4319")]
+        bind: SocketAddr,
+        /// Explicitly allow binding the API to a non-loopback interface.
+        #[arg(long)]
+        allow_remote: bool,
+    },
     /// Plan or execute allowlisted recorded shell commands in a detached Git worktree.
     Replay {
         run_id: Uuid,
@@ -118,10 +132,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             import(&registry, cli.db.as_deref(), &harness, path).await?
         }
         Command::Inspect { run_id, raw } => inspect(cli.db.as_deref(), run_id, raw).await?,
-        Command::Export { run_id, output } => {
-            export(cli.db.as_deref(), run_id, output.as_deref()).await?
-        }
+        Command::Export {
+            run_id,
+            output,
+            raw,
+        } => export(cli.db.as_deref(), run_id, output.as_deref(), raw).await?,
         Command::Compare { left, right } => compare(cli.db.as_deref(), left, right).await?,
+        Command::Serve { bind, allow_remote } => {
+            serve_local(&registry, cli.db.as_deref(), bind, allow_remote).await?
+        }
         Command::Replay {
             run_id,
             repo,
@@ -200,7 +219,7 @@ async fn doctor(registry: &AdapterRegistry) -> Result<(), Box<dyn Error>> {
         "installed_harnesses": installed,
         "harnesses": harnesses,
         "security": {
-            "redaction": "enabled-before-persistence",
+            "redaction": "enabled-before-persistence-and-reapplied-on-export",
             "environment_capture": "disabled-by-default"
         }
     }))?;
@@ -294,6 +313,7 @@ async fn export(
     db: Option<&Path>,
     run_id: Uuid,
     output: Option<&Path>,
+    include_raw: bool,
 ) -> Result<(), Box<dyn Error>> {
     let store = open_store(db).await?;
     let events = store.load_run_events(run_id).await?;
@@ -301,8 +321,13 @@ async fn export(
         return Err(input_error(format!("run {run_id} was not found")).into());
     }
 
+    let redactor = Redactor::default();
     let mut body = String::new();
     for event in events {
+        let mut event = redact_event(event, &redactor)?;
+        if !include_raw {
+            event.raw_source = None;
+        }
         body.push_str(&serde_json::to_string(&event)?);
         body.push('\n');
     }
@@ -336,6 +361,20 @@ async fn compare(
         "left": {"run_id": left, "stats": trace_stats(&left_events)},
         "right": {"run_id": right, "stats": trace_stats(&right_events)},
     }))?;
+    Ok(())
+}
+
+async fn serve_local(
+    registry: &AdapterRegistry,
+    db: Option<&Path>,
+    bind: SocketAddr,
+    allow_remote: bool,
+) -> Result<(), Box<dyn Error>> {
+    let store = open_store(db).await?;
+    store.recover_interrupted_runs().await?;
+    let config = ServerConfig { bind, allow_remote };
+    eprintln!("AgentTrace API: http://{}", config.bind);
+    serve_api(config, store, registry.clone()).await?;
     Ok(())
 }
 
@@ -666,5 +705,30 @@ mod tests {
         let stats = trace_stats(&[event]);
         assert_eq!(stats["event_count"], 1);
         assert_eq!(stats["provenance"]["native"], 1);
+    }
+
+    #[test]
+    fn export_redaction_reapplies_current_policy() {
+        let mut event = EventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            HarnessId::Codex,
+            IntegrationMode::StructuredStream,
+            Provenance::native("test"),
+            EventKind::Checkpoint,
+            json!({
+                "authorization": "Bearer abcdefghijklmnopqrstuvwxyz",
+                "path": "/home/user/.ssh/id_ed25519"
+            }),
+        );
+        event.attributes.insert(
+            "token".into(),
+            Value::String("sk-abcdefghijklmnopqrstuvwxyz123456".into()),
+        );
+        let redacted = redact_event(event, &Redactor::default()).unwrap();
+        assert_eq!(redacted.payload["authorization"], REDACTED);
+        assert_eq!(redacted.payload["path"], REDACTED);
+        assert_eq!(redacted.attributes["token"], REDACTED);
     }
 }
