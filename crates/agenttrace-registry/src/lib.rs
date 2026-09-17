@@ -76,7 +76,7 @@ impl HarnessAdapter for RegisteredAdapter {
 fn implemented_modes(harness: HarnessId, modes: Vec<IntegrationMode>) -> Vec<IntegrationMode> {
     modes
         .into_iter()
-        .filter(|mode| match (harness, mode) {
+        .filter(|mode| match (harness, **mode) {
             (HarnessId::ClaudeCode, IntegrationMode::Hook)
             | (HarnessId::Pi, IntegrationMode::Rpc)
             | (HarnessId::Cline, IntegrationMode::Sdk)
