@@ -1,0 +1,7 @@
+{"type":"session","version":3,"id":"pi-fixture","timestamp":"2026-09-17T00:00:00Z","cwd":"/project"}
+{"type":"agent_start"}
+{"type":"tool_execution_start","toolCallId":"tool-1","toolName":"bash","args":{"command":"cargo test"}}
+{"type":"tool_execution_end","toolCallId":"tool-1","toolName":"bash","result":{"content":[{"type":"text","text":"ok"}]},"isError":false}
+{"type":"message_update","usage":{"input":50,"output":10,"cacheRead":5,"cacheWrite":0,"reasoning":2,"totalTokens":67,"cost":{"total":0.001}},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Done"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Done"}],"api":"anthropic-messages","provider":"anthropic","model":"claude-sonnet-4-5","usage":{"input":50,"output":10,"cacheRead":5,"cacheWrite":0,"reasoning":2,"totalTokens":67,"cost":{"input":0.0005,"output":0.0005,"cacheRead":0,"cacheWrite":0,"total":0.001}},"stopReason":"stop","timestamp":1770000000000}}
+{"type":"agent_end","messages":[]}

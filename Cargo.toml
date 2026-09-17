@@ -10,6 +10,9 @@ members = [
   "crates/adapters/common",
   "crates/adapters/codex",
   "crates/adapters/claude-code",
+  "crates/adapters/opencode",
+  "crates/adapters/pi",
+  "crates/adapters/gemini",
 ]
 
 [workspace.package]
