@@ -1,0 +1,13 @@
+[package]
+name = "agenttrace-collector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agenttrace-process = { path = "../agenttrace-process" }
+agenttrace-protocol.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
