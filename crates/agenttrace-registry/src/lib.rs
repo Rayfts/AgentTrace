@@ -2,8 +2,8 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use agenttrace_adapter_aider::AiderAdapter;
 use agenttrace_adapter_api::{
-    AdapterError, CapabilityReport, Detection, EventStream, HarnessAdapter, ImportRequest,
-    RunHandle, RunRequest,
+    AdapterError, Capability, CapabilityReport, Detection, EventStream, HarnessAdapter,
+    ImportRequest, RunHandle, RunRequest,
 };
 use agenttrace_adapter_claude_code::ClaudeCodeAdapter;
 use agenttrace_adapter_cline::ClineAdapter;
@@ -53,6 +53,7 @@ impl HarnessAdapter for RegisteredAdapter {
     async fn capabilities(&self) -> Result<CapabilityReport, AdapterError> {
         let mut report = self.inner.capabilities().await?;
         report.integration_modes = implemented_modes(self.id(), report.integration_modes);
+        materialize_unavailable_capabilities(&mut report);
         Ok(report)
     }
 
@@ -84,6 +85,16 @@ fn implemented_modes(harness: HarnessId, modes: Vec<IntegrationMode>) -> Vec<Int
             _ => true,
         })
         .collect()
+}
+
+fn materialize_unavailable_capabilities(report: &mut CapabilityReport) {
+    for capability in Capability::ALL {
+        if report.capabilities.contains_key(&capability) {
+            continue;
+        }
+        let evidence = report.evidence(capability);
+        report.capabilities.insert(capability, evidence);
+    }
 }
 
 fn registered<T>(adapter: T) -> Arc<dyn HarnessAdapter>
@@ -166,6 +177,8 @@ impl AdapterRegistry {
 
 #[cfg(test)]
 mod tests {
+    use agenttrace_protocol::ProvenanceLevel;
+
     use super::*;
 
     #[test]
@@ -206,6 +219,21 @@ mod tests {
                 vec![IntegrationMode::SessionImport, IntegrationMode::FilesystemWatch],
             ),
             vec![IntegrationMode::SessionImport]
+        );
+    }
+
+    #[test]
+    fn registry_materializes_negative_capabilities() {
+        let mut report = CapabilityReport {
+            harness: HarnessId::Aider,
+            integration_modes: vec![IntegrationMode::ProcessWrap],
+            capabilities: BTreeMap::new(),
+        };
+        materialize_unavailable_capabilities(&mut report);
+        assert_eq!(report.capabilities.len(), Capability::ALL.len());
+        assert_eq!(
+            report.status(Capability::McpActivity),
+            ProvenanceLevel::Unavailable
         );
     }
 }
