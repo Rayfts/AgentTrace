@@ -13,7 +13,7 @@ use agenttrace_protocol::{
 use async_trait::async_trait;
 use futures::stream;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, ffi::OsString};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 const ANALYTICS: &str = "aider --analytics-log JSONL";
@@ -170,7 +170,8 @@ pub fn normalize_analytics(
     let name = raw
         .get("event")
         .and_then(Value::as_str)
-        .unwrap_or("unknown");
+        .map(str::to_owned)
+        .unwrap_or_else(|| "unknown".to_owned());
     let properties = raw.get("properties").cloned().unwrap_or_else(|| json!({}));
     let kind = if name == "launched" {
         EventKind::RunStarted
@@ -189,7 +190,7 @@ pub fn normalize_analytics(
         IntegrationMode::LogImport,
         ANALYTICS,
         kind,
-        json!({"event":name,"properties":properties}),
+        json!({"event":name.clone(),"properties":properties}),
         raw,
     );
 
@@ -238,8 +239,8 @@ pub fn normalize_analytics(
 
     if kind == EventKind::Error {
         event.error = Some(ErrorInfo {
-            message: name.into(),
-            code: Some(name.into()),
+            message: name.clone(),
+            code: Some(name),
             recoverable: None,
         });
     }
