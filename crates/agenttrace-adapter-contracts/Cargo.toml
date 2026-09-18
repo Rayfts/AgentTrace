@@ -1,0 +1,20 @@
+[package]
+name = "agenttrace-adapter-contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agenttrace-adapter-api = { path = "../agenttrace-adapter-api" }
+agenttrace-protocol = { path = "../agenttrace-protocol" }
+agenttrace-adapter-aider = { path = "../adapters/aider" }
+agenttrace-adapter-cline = { path = "../adapters/cline" }
+agenttrace-adapter-continue = { path = "../adapters/continue" }
+agenttrace-adapter-goose = { path = "../adapters/goose" }
+agenttrace-adapter-roo-code = { path = "../adapters/roo-code" }
+futures.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+uuid.workspace = true

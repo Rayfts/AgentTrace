@@ -1,0 +1,10 @@
+{
+  "name": "large-trace-v2",
+  "schema_version": 2,
+  "event_count": 100000,
+  "payload_bytes": 256,
+  "normalization_iterations": 100000,
+  "harness": "codex",
+  "integration_mode": "structured_stream",
+  "notes": "The benchmark crate expands this deterministic fixture specification into 100,000 schema-valid AgentTrace events. Keeping the recipe in source control avoids committing roughly 50 MB of repetitive generated JSONL while preserving reproducibility."
+}

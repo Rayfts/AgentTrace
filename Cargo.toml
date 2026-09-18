@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/agenttrace-protocol",
+  "crates/agenttrace-adapter-api",
+  "crates/agenttrace-adapter-contracts",
+  "crates/agenttrace-storage",
+  "crates/agenttrace-redaction",
+  "crates/agenttrace-process",
+  "crates/agenttrace-collector",
+  "crates/agenttrace-registry",
+  "crates/agenttrace-replay",
+  "crates/agenttrace-cli",
+  "crates/agenttrace-server",
+  "crates/agenttrace-benchmarks",
+  "crates/adapters/common",
+  "crates/adapters/codex",
+  "crates/adapters/claude-code",
+  "crates/adapters/opencode",
+  "crates/adapters/pi",
+  "crates/adapters/gemini",
+  "crates/adapters/aider",
+  "crates/adapters/goose",
+  "crates/adapters/cline",
+  "crates/adapters/roo-code",
+  "crates/adapters/continue",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/Rayfts/AgentTrace"
+homepage = "https://github.com/Rayfts/AgentTrace"
+authors = ["AgentTrace contributors"]
+
+[workspace.dependencies]
+agenttrace-protocol = { path = "crates/agenttrace-protocol" }
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate"] }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = { version = "1", features = ["serde", "v4"] }
+zstd = "0.13"

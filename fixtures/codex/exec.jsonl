@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"0199-agenttrace-fixture"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","item_type":"reasoning","text":"Inspect the failing test before changing files."}}
+{"type":"item.started","item":{"id":"item_1","item_type":"command_execution","command":"cargo test -p sample","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","item_type":"command_execution","command":"cargo test -p sample","aggregated_output":"test result: FAILED. 0 passed; 1 failed","exit_code":101,"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_2","item_type":"file_change","changes":[{"path":"src/lib.rs","kind":"update"}],"status":"completed"}}
+{"type":"item.started","item":{"id":"item_3","item_type":"mcp_tool_call","server":"github","tool":"get_issue","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","item_type":"mcp_tool_call","server":"github","tool":"get_issue","status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","item_type":"assistant_message","text":"The failing assertion was corrected and the targeted test now passes."}}
+{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":400,"output_tokens":210}}

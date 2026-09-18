@@ -1,0 +1,333 @@
+use agenttrace_adapter_api::{
+    AdapterError, Capability, CapabilityEvidence, CapabilityReport, Detection, EventStream,
+    HarnessAdapter, ImportRequest, RunHandle, RunRequest,
+};
+use agenttrace_adapter_common::{
+    StructuredRunRegistry, captured_stdout_event, detect_binary, native_harness_event,
+};
+use agenttrace_process::ProcessSpec;
+use agenttrace_protocol::{
+    CommandInfo, ErrorInfo, EventEnvelope, EventKind, FilesystemImpact, HarnessId, IntegrationMode,
+    ModelInfo, ProvenanceLevel, TokenUsage,
+};
+use async_trait::async_trait;
+use futures::stream;
+use serde_json::{Value, json};
+use std::{collections::BTreeMap, ffi::OsString};
+use uuid::Uuid;
+const SOURCE: &str = "gemini --output-format stream-json";
+#[derive(Clone, Default)]
+pub struct GeminiAdapter {
+    runs: StructuredRunRegistry,
+}
+#[async_trait]
+impl HarnessAdapter for GeminiAdapter {
+    fn id(&self) -> HarnessId {
+        HarnessId::Gemini
+    }
+    async fn detect(&self) -> Result<Detection, AdapterError> {
+        detect_binary("gemini", vec![IntegrationMode::StructuredStream]).await
+    }
+    async fn capabilities(&self) -> Result<CapabilityReport, AdapterError> {
+        let mut c = BTreeMap::new();
+        for x in [
+            Capability::ModelInteractions,
+            Capability::ToolCalls,
+            Capability::ToolResults,
+            Capability::ShellCommands,
+            Capability::TerminalOutput,
+            Capability::FileReads,
+            Capability::FileWrites,
+            Capability::Patches,
+            Capability::Failures,
+            Capability::Duration,
+            Capability::TokenUsage,
+            Capability::RawEvents,
+            Capability::FinalOutput,
+        ] {
+            c.insert(
+                x,
+                CapabilityEvidence {
+                    level: ProvenanceLevel::Native,
+                    source: SOURCE.into(),
+                    notes: None,
+                },
+            );
+        }
+        c.insert(
+            Capability::Cost,
+            CapabilityEvidence {
+                level: ProvenanceLevel::Unavailable,
+                source: SOURCE.into(),
+                notes: Some("Gemini stream-json stats do not expose cost".into()),
+            },
+        );
+        Ok(CapabilityReport {
+            harness: HarnessId::Gemini,
+            integration_modes: vec![IntegrationMode::StructuredStream],
+            capabilities: c,
+        })
+    }
+    async fn start(&self, r: RunRequest) -> Result<RunHandle, AdapterError> {
+        let (p, a) = command(&r.argv)?;
+        let mut s = ProcessSpec::new(p, r.cwd);
+        s.args = a;
+        self.runs
+            .launch(r.run_id, HarnessId::Gemini, s, normalize_line)
+            .await
+    }
+    async fn events(&self, r: &RunHandle) -> Result<EventStream, AdapterError> {
+        self.runs.events(r.run_id)
+    }
+    async fn cancel(&self, r: &RunHandle) -> Result<(), AdapterError> {
+        self.runs.cancel(r.run_id)
+    }
+    async fn import(&self, r: ImportRequest) -> Result<EventStream, AdapterError> {
+        let text = tokio::fs::read_to_string(&r.path).await?;
+        let t = Uuid::new_v4();
+        let mut s = 0;
+        let mut o = Vec::new();
+        for l in text.lines().filter(|l| !l.trim().is_empty()) {
+            o.extend(normalize_line(r.run_id, t, &mut s, l));
+        }
+        Ok(Box::pin(stream::iter(o.into_iter().map(Ok))))
+    }
+}
+fn command(argv: &[OsString]) -> Result<(OsString, Vec<OsString>), AdapterError> {
+    let Some((p, rest)) = argv.split_first() else {
+        return Err(AdapterError::InvalidRequest(
+            "missing Gemini CLI command".into(),
+        ));
+    };
+    let mut a = rest.to_vec();
+    if let Some(i) = a
+        .iter()
+        .position(|x| x.to_string_lossy() == "--output-format")
+    {
+        let v = a.get(i + 1).map(|x| x.to_string_lossy()).ok_or_else(|| {
+            AdapterError::InvalidRequest("--output-format requires a value".into())
+        })?;
+        if v != "stream-json" {
+            return Err(AdapterError::InvalidRequest(
+                "Gemini tracing requires --output-format stream-json".into(),
+            ));
+        }
+    } else {
+        a.push("--output-format".into());
+        a.push("stream-json".into());
+    }
+    Ok((p.clone(), a))
+}
+pub fn normalize_line(r: Uuid, t: Uuid, s: &mut u64, line: &str) -> Vec<EventEnvelope> {
+    let Ok(raw) = serde_json::from_str::<Value>(line) else {
+        return vec![captured_stdout_event(r, t, s, HarnessId::Gemini, line)];
+    };
+    match raw.get("type").and_then(Value::as_str).unwrap_or("unknown") {
+        "init" => {
+            let mut e = native(
+                r,
+                t,
+                s,
+                EventKind::RunStarted,
+                json!({"session_id":raw.get("session_id"),"model":raw.get("model")}),
+                raw.clone(),
+            );
+            if let Some(m) = raw.get("model").and_then(Value::as_str) {
+                e.model = Some(ModelInfo {
+                    id: m.into(),
+                    provider: Some("google".into()),
+                })
+            }
+            vec![e]
+        }
+        "message" => vec![native(
+            r,
+            t,
+            s,
+            if raw.get("role").and_then(Value::as_str) == Some("assistant") {
+                EventKind::ModelResponse
+            } else {
+                EventKind::ModelRequest
+            },
+            json!({"role":raw.get("role"),"content":raw.get("content"),"delta":raw.get("delta")}),
+            raw,
+        )],
+        "tool_use" => normalize_tool(r, t, s, raw),
+        "tool_result" => {
+            let mut e = native(r, t, s, EventKind::ToolResult, raw.clone(), raw.clone());
+            if raw.get("status").and_then(Value::as_str) == Some("error") {
+                e.error = Some(ErrorInfo {
+                    message: raw
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Gemini tool failed")
+                        .into(),
+                    code: raw
+                        .pointer("/error/type")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    recoverable: None,
+                })
+            }
+            vec![e]
+        }
+        "error" => {
+            let mut e = native(r, t, s, EventKind::Error, raw.clone(), raw.clone());
+            e.error = Some(ErrorInfo {
+                message: raw
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Gemini error")
+                    .into(),
+                code: None,
+                recoverable: None,
+            });
+            vec![e]
+        }
+        "result" => normalize_result(r, t, s, raw),
+        _ => vec![native(r, t, s, EventKind::Checkpoint, raw.clone(), raw)],
+    }
+}
+fn normalize_tool(r: Uuid, t: Uuid, s: &mut u64, raw: Value) -> Vec<EventEnvelope> {
+    let name = raw.get("tool_name").and_then(Value::as_str).unwrap_or("");
+    let p = raw.get("parameters").cloned().unwrap_or(Value::Null);
+    let mut o = vec![native(
+        r,
+        t,
+        s,
+        EventKind::ToolCall,
+        raw.clone(),
+        raw.clone(),
+    )];
+    match name {
+        "run_shell_command" => {
+            let c = p.get("command").and_then(Value::as_str).unwrap_or("");
+            let mut e = native(
+                r,
+                t,
+                s,
+                EventKind::ShellCommand,
+                json!({"command":c,"tool_id":raw.get("tool_id")}),
+                raw,
+            );
+            e.command = Some(CommandInfo {
+                program: "shell".into(),
+                args: if c.is_empty() { vec![] } else { vec![c.into()] },
+                cwd: None,
+                exit_code: None,
+            });
+            o.push(e)
+        }
+        "read_file" | "read_many_files" => file(&mut o, r, t, s, EventKind::FileRead, &p, raw),
+        "write_file" => file(&mut o, r, t, s, EventKind::FileWrite, &p, raw),
+        "replace" => file(&mut o, r, t, s, EventKind::FilePatch, &p, raw),
+        _ => {}
+    }
+    o
+}
+fn file(
+    o: &mut Vec<EventEnvelope>,
+    r: Uuid,
+    t: Uuid,
+    s: &mut u64,
+    k: EventKind,
+    p: &Value,
+    raw: Value,
+) {
+    let path = p
+        .get("file_path")
+        .or_else(|| p.get("path"))
+        .and_then(Value::as_str);
+    let mut e = native(r, t, s, k, json!({"path":path}), raw);
+    let mut f = FilesystemImpact::default();
+    if let Some(x) = path {
+        if k == EventKind::FileRead {
+            f.paths_read.push(x.into())
+        } else {
+            f.paths_written.push(x.into())
+        }
+    }
+    e.filesystem_impact = Some(f);
+    o.push(e)
+}
+fn normalize_result(r: Uuid, t: Uuid, s: &mut u64, raw: Value) -> Vec<EventEnvelope> {
+    let stats = raw.get("stats");
+    let usage = stats.map(|v| TokenUsage {
+        input_tokens: v.get("input_tokens").and_then(Value::as_u64),
+        output_tokens: v.get("output_tokens").and_then(Value::as_u64),
+        cached_input_tokens: v.get("cached").and_then(Value::as_u64),
+        cache_write_input_tokens: None,
+        reasoning_output_tokens: None,
+    });
+    let mut u = native(
+        r,
+        t,
+        s,
+        EventKind::ModelUsage,
+        json!({"stats":stats}),
+        raw.clone(),
+    );
+    u.usage = usage.clone();
+    let failed = raw.get("status").and_then(Value::as_str) == Some("error");
+    let mut done = native(
+        r,
+        t,
+        s,
+        if failed {
+            EventKind::RunFailed
+        } else {
+            EventKind::RunCompleted
+        },
+        raw.clone(),
+        raw.clone(),
+    );
+    done.usage = usage;
+    if let Some(ms) = raw.pointer("/stats/duration_ms").and_then(Value::as_u64) {
+        done.duration_ns = Some(ms.saturating_mul(1_000_000));
+    }
+    if failed {
+        done.error = Some(ErrorInfo {
+            message: raw
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .unwrap_or("Gemini run failed")
+                .into(),
+            code: raw
+                .pointer("/error/type")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            recoverable: None,
+        })
+    }
+    vec![u, done]
+}
+fn native(r: Uuid, t: Uuid, s: &mut u64, k: EventKind, p: Value, raw: Value) -> EventEnvelope {
+    native_harness_event(r, t, s, HarnessId::Gemini, SOURCE, k, p, raw)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn fixture_maps_contract() {
+        let f = include_str!("../../../../fixtures/gemini/stream.jsonl");
+        let mut s = 0;
+        let r = Uuid::new_v4();
+        let t = Uuid::new_v4();
+        let e: Vec<_> = f
+            .lines()
+            .flat_map(|l| normalize_line(r, t, &mut s, l))
+            .collect();
+        assert!(e.iter().any(|x| x.kind == EventKind::ShellCommand));
+        assert!(e.iter().any(|x| x.kind == EventKind::ToolResult));
+        assert!(e.iter().any(|x| x.kind == EventKind::RunCompleted));
+        assert_eq!(
+            e.iter()
+                .find(|x| x.kind == EventKind::RunCompleted)
+                .unwrap()
+                .usage
+                .as_ref()
+                .and_then(|u| u.input_tokens),
+            Some(100)
+        );
+    }
+}

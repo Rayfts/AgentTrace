@@ -1,0 +1,27 @@
+[package]
+name = "agenttrace-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agenttrace-adapter-api = { path = "../agenttrace-adapter-api" }
+agenttrace-protocol = { path = "../agenttrace-protocol" }
+agenttrace-adapter-aider = { path = "../adapters/aider" }
+agenttrace-adapter-claude-code = { path = "../adapters/claude-code" }
+agenttrace-adapter-cline = { path = "../adapters/cline" }
+agenttrace-adapter-codex = { path = "../adapters/codex" }
+agenttrace-adapter-continue = { path = "../adapters/continue" }
+agenttrace-adapter-gemini = { path = "../adapters/gemini" }
+agenttrace-adapter-goose = { path = "../adapters/goose" }
+agenttrace-adapter-opencode = { path = "../adapters/opencode" }
+agenttrace-adapter-pi = { path = "../adapters/pi" }
+agenttrace-adapter-roo-code = { path = "../adapters/roo-code" }
+async-trait.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+uuid.workspace = true

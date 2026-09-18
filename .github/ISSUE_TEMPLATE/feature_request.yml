@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose a new capability or integration
+title: "[feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What debugging or observability problem should AgentTrace solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the user-visible behavior, not only an implementation idea.
+    validations:
+      required: true
+  - type: input
+    id: harness
+    attributes:
+      label: Harness or integration
+      description: Name the relevant harness if this depends on a particular agent runtime.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Upstream evidence
+      description: If proposing telemetry from a harness, link or describe the documented public surface that exposes it.
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints or tradeoffs
+      description: Include privacy, security, portability, performance, or compatibility concerns.

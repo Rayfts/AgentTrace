@@ -1,0 +1,5 @@
+{"type":"init","timestamp":"2026-09-17T00:00:00Z","session_id":"gem-fixture","model":"gemini-2.5-pro"}
+{"type":"message","timestamp":"2026-09-17T00:00:01Z","role":"assistant","content":"Running tests","delta":false}
+{"type":"tool_use","timestamp":"2026-09-17T00:00:02Z","tool_name":"run_shell_command","tool_id":"tool-1","parameters":{"command":"cargo test"}}
+{"type":"tool_result","timestamp":"2026-09-17T00:00:03Z","tool_id":"tool-1","status":"success","output":"ok"}
+{"type":"result","timestamp":"2026-09-17T00:00:04Z","status":"success","stats":{"total_tokens":150,"input_tokens":100,"output_tokens":50,"cached":20,"input":80,"duration_ms":900,"tool_calls":1,"models":{"gemini-2.5-pro":{"total_tokens":150,"input_tokens":100,"output_tokens":50,"cached":20,"input":80}}}}

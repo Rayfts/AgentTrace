@@ -1,0 +1,11 @@
+/target
+*.db
+*.db-shm
+*.db-wal
+.agenttrace/
+.DS_Store
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
