@@ -1,10 +1,12 @@
 # Contributing to AgentTrace
 
-AgentTrace is an evidence-first observability project. Contributions are welcome, but telemetry claims must be grounded in something the supported harness actually exposes.
+Thanks for helping improve AgentTrace. Contributions are welcome across the trace protocol, storage, collectors, harness adapters, replay safety, CLI/API, desktop inspector, fixtures, benchmarks, documentation, and privacy tooling.
+
+AgentTrace has one non-negotiable rule: **never fabricate telemetry**.
 
 ## Development setup
 
-The core workspace requires Rust 1.85 or newer. The desktop Tauri shell is intentionally a separate workspace and currently requires Rust 1.90 or newer plus Node.js 24.
+The Rust workspace requires Rust 1.85+.
 
 ```bash
 cargo fmt --all -- --check
@@ -13,7 +15,7 @@ cargo test --workspace --all-features
 cargo check --workspace --all-targets
 ```
 
-For the desktop web layer:
+For the desktop inspector:
 
 ```bash
 cd apps/desktop
@@ -21,33 +23,25 @@ npm install
 npm run build
 ```
 
-For the Tauri shell:
+See `docs/testing.md` for the full validation matrix.
 
-```bash
-cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
-```
+## Design rules
 
-## Adapter rules
+1. Every normalized claim must be `native`, `inferred`, `derived`, or `unavailable` with evidence for that provenance.
+2. Missing telemetry stays unavailable; do not infer richer semantics just to make adapters look uniform.
+3. Preserve raw upstream records where it is safe and useful so normalization can improve later.
+4. Protocol-breaking changes require a schema version change and migration/documentation updates.
+5. New harness behavior must be backed by upstream source or official documentation. Do not invent flags, event fields, hooks, or headless modes.
+6. Replay stays dry-run-first and exact-allowlisted. Security boundaries must not be weakened for convenience.
+7. Redaction and local-first defaults are product behavior, not optional polish.
+8. Add contract fixtures/tests for adapter capability claims and negative/unavailable cases.
 
-Every adapter change must preserve the telemetry truth model:
+## Harness adapters
 
-- `native` means the value came directly from the harness or a documented integration surface.
-- `inferred` means AgentTrace observed a side effect and documents the inference rule.
-- `derived` means AgentTrace deterministically calculated the value from recorded evidence.
-- `unavailable` means the harness does not expose the information reliably enough to claim it.
-
-Do not fill gaps by guessing. Do not label inferred data as native. Do not depend on private or undocumented APIs when a stable public mechanism exists.
-
-When adding or changing a harness integration, include an upstream reference in `docs/research/reference-adapters.md` or `docs/harnesses.md`, plus a small sanitized fixture whenever the upstream format can be represented safely.
-
-## Fixtures
-
-Fixtures must not contain real API keys, user prompts, customer repositories, private file paths, credentials, or proprietary source code. Prefer minimal synthetic records that exercise one protocol behavior at a time.
-
-## Security-sensitive changes
-
-Changes to redaction, replay, process execution, raw-source retention, path handling, or remote binding deserve explicit tests for the failure mode being changed. Replay must remain dry-run-first and must never silently broaden its execution allowlist.
+Document the official upstream repository, supported versions, integration mode, event source, authentication assumptions, capabilities, and known limitations. Update `docs/harnesses.md` and the adapter contract fixtures in the same PR.
 
 ## Pull requests
 
-Keep commits reviewable and explain the evidence behind any new telemetry capability. PRs should state which harnesses and operating systems were tested and whether a capability is native, inferred, derived, or unavailable.
+Keep PRs focused. Explain the telemetry/provenance impact, tests run, privacy/security implications, and any schema or compatibility changes. Performance-sensitive changes should include benchmark notes where practical.
+
+By contributing, you agree to follow `CODE_OF_CONDUCT.md` and the Apache-2.0 license terms.
