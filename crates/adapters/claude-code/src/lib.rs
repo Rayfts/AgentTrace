@@ -384,7 +384,7 @@ fn normalize_assistant(
             sequence,
             EventKind::Error,
             json!({"error": error}),
-            raw,
+            raw.clone(),
         );
         event.error = Some(ErrorInfo {
             message: error.to_owned(),
@@ -557,7 +557,7 @@ fn normalize_user(
                 sequence,
                 EventKind::FilePatch,
                 edit.clone(),
-                raw,
+                raw.clone(),
             );
             let mut impact = FilesystemImpact::default();
             if let Some(path) = path {

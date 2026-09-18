@@ -11,7 +11,7 @@ use agenttrace_protocol::{
     ProvenanceLevel, TokenUsage,
 };
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{collections::BTreeMap, ffi::OsString};
 use uuid::Uuid;
 const SOURCE: &str = "goose run --output-format stream-json";
