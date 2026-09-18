@@ -1,23 +1,23 @@
 # Security Policy
 
-AgentTrace records command output, file activity, model/tool metadata, and raw harness records when available. That makes secret handling and local execution boundaries part of the product's security model, not optional polish.
+AgentTrace records and replays developer-tool activity, so traces may contain source code, commands, paths, prompts, tool payloads, and other sensitive engineering data.
 
 ## Reporting a vulnerability
 
-Do not publish exploit details, credentials, or sensitive trace data in a public issue.
+Do not publish exploit details, credentials, sensitive traces, replay bypasses, redaction bypasses, or remote-access weaknesses in a public issue.
 
-Use GitHub's private vulnerability reporting or Security Advisory flow for this repository when it is available. If private reporting is unavailable, open a public issue containing only a request for a private maintainer contact and enough non-sensitive context to route the report. Do not include reproduction secrets or exploit payloads there.
+If GitHub private vulnerability reporting is enabled, use **Security → Report a vulnerability**. Otherwise, open a minimal non-sensitive issue requesting a private reporting channel.
 
-Please include the affected AgentTrace version or commit, operating system, relevant harness, attack preconditions, and a minimal reproduction that does not contain real credentials or proprietary source code.
+Include the affected commit/version, operating system, minimal reproduction, impact, and whether the issue can expose trace contents, local files, credentials, execute unapproved commands, or bypass loopback/redaction protections.
 
 ## Security boundaries
 
-AgentTrace redacts known secret patterns and sensitive JSON fields before normal persistence paths. Environment capture is deny-by-default. Raw records can still contain unexpected sensitive material, so they should be treated as local sensitive data.
+- No automatic trace upload exists; storage is local-first.
+- Environment capture is deny-by-default and must not indiscriminately persist secrets.
+- Redaction is applied before normal persistence and again on read/export surfaces.
+- The local API binds to loopback by default; non-loopback binding requires explicit opt-in.
+- Replay is dry-run-first and requires explicit execution plus an exact recorded command/sequence allowlist.
+- Replay's temporary Git worktree protects repository state but is **not an operating-system sandbox**.
+- Raw payloads can still contain sensitive information; users should review traces before sharing them.
 
-Replay is dry-run-first and requires an explicit allowlist. Replay uses a detached Git worktree and a scrubbed environment, but it is **not an operating-system sandbox**. An allowlisted command still executes with the current user's OS permissions and can access resources outside the worktree if the command itself does so.
-
-The local API binds to loopback by default. Binding to a non-loopback address requires an explicit opt-in and should only be done behind an appropriate trusted network boundary.
-
-## Supported versions
-
-AgentTrace is pre-1.0. Security fixes are applied to the current development line; older snapshots are not guaranteed to receive backports until a stable support policy is published.
+Changes to redaction, replay, API binding, artifact handling, or credential scrubbing should include focused regression tests and relevant documentation updates.
