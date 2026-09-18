@@ -58,7 +58,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.90
+      - uses: dtolnay/rust-toolchain@1.120
       - run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 
   audit:
