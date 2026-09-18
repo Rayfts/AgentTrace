@@ -12,7 +12,7 @@ use agenttrace_protocol::{
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, ffi::OsString};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 const SOURCE: &str = "cline --json NDJSON";
 #[derive(Clone, Default)]
