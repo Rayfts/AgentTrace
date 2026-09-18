@@ -1,6 +1,6 @@
 # Harness research and capability matrix
 
-Research snapshot: 2026-09-17. Upstream source research determines which integration modes AgentTrace is willing to implement; the matrix below reports what the **current product registry normalizes today**. `agenttrace capabilities <harness>` is the runtime source of truth and materializes all 21 capability categories, including explicit `unavailable` evidence for fields an adapter does not expose.
+Research snapshot: 2026-09-17, with Pi repository provenance refreshed on 2026-09-18 after its upstream ownership move. Upstream source research determines which integration modes AgentTrace is willing to implement; the matrix below reports what the **current product registry normalizes today**. `agenttrace capabilities <harness>` is the runtime source of truth and materializes all 21 capability categories, including explicit `unavailable` evidence for fields an adapter does not expose.
 
 Legend: **N** native, **I** inferred, **D** derived, **—** unavailable/not currently normalized by the selected adapter.
 
@@ -45,9 +45,9 @@ Adapter strategy: launch `opencode run --format json` or import its JSONL output
 
 ## Pi
 
-Official repository: <https://github.com/earendil-works/pi>
+Official repository: <https://github.com/mitsuhiko/pi-mono>
 
-Pi documents interactive, JSON, RPC, and SDK modes. `pi --mode json` emits JSON lines covering session/turn/message/tool lifecycle, provider usage, and context-compaction related records; sessions are JSONL.
+The current coding-agent package is `@mariozechner/pi-coding-agent`. Pi documents interactive, JSON, RPC, and SDK modes under `packages/coding-agent/docs/`. `pi --mode json` emits JSON lines covering session/turn/message/tool lifecycle, provider usage, and context-compaction related records; sessions are JSONL.
 
 Adapter strategy: launched runs use JSON mode and existing JSONL sessions can be imported. Pi's RPC surface has been researched but is **not** advertised as implemented until AgentTrace has a real RPC collector/control path. The current normalizer covers model/tool, shell/file, context, usage, cost when reported, and raw events; MCP/subagent-specific normalization is not claimed yet.
 
